@@ -330,6 +330,7 @@ jobs:
           dpkg -r libaquamarine10 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
+          rm -rf /usr/include/aquamarine 2>/dev/null || true
           apt-get install -y -t sid --no-install-recommends libdisplay-info3 || \
             apt-get install -y --no-install-recommends libdisplay-info3 || true
           if [ -f /libaquamarine10_*.deb ]; then
@@ -405,19 +406,20 @@ jobs:
             echo "Hypr changelog already has +anland1 suffix, skipping"
           fi
 
-      # ---------- 21. 安装 Hyprland build-dep（关键：先移除 sid 的 Aquamarine，再安装我们自己的）----------
+      # ---------- 21. 安装 Hyprland build-dep ----------
       - name: Install Hyprland build dependencies
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
-          # 1. 先移除所有 Aquamarine 包（包括 dev 包）
+          # 1. 先移除所有 Aquamarine 包
           dpkg -r libaquamarine10 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
-          # 强制移除可能残留的头文件
           rm -rf /usr/include/aquamarine 2>/dev/null || true
+          # 清理自动安装的依赖
+          apt autoremove -y || true
           
-          # 2. 运行 build-dep（会从 sid 安装 aquamarine-dev）
+          # 2. 运行 build-dep
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
@@ -435,6 +437,7 @@ jobs:
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
+          apt autoremove -y || true
           
           # 4. 安装我们自己构建的 Aquamarine（包含 Anland）
           if [ -f /libaquamarine10_*.deb ]; then
