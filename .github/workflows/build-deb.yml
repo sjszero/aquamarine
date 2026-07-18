@@ -330,9 +330,10 @@ jobs:
         if: inputs.skip_hyprland != true
         run: echo "Starting Hyprland build..."
 
+      # ---------- 缓存 Hyprland 源码（仅在 clean_cache 为 false 时恢复） ----------
       - name: Cache Hyprland source
         id: hypr-src-cache
-        if: inputs.skip_hyprland != true
+        if: inputs.skip_hyprland != true && inputs.clean_cache != true
         uses: actions/cache@v4
         with:
           path: ${{ env.HYPR_SRC }}-*
@@ -341,12 +342,13 @@ jobs:
             src-hypr-${{ inputs.hyprland_version }}-
             src-hypr-
 
+      # ---------- 获取 Hyprland 源码（当 clean_cache 为 true 或缓存未命中时） ----------
       - name: Fetch Hyprland source
-        if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
+        if: inputs.skip_hyprland != true && (inputs.clean_cache == true || steps.hypr-src-cache.outputs.cache-hit != 'true')
         run: |
           apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
 
-      # ---------- 关键修复：git apply 总是执行 ----------
+      # ---------- 总是应用补丁（git apply 会检测是否已应用） ----------
       - name: Apply Anland patch to Hyprland
         if: inputs.skip_hyprland != true
         run: |
