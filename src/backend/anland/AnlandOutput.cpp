@@ -6,6 +6,7 @@
 #include <poll.h>
 #include <sys/eventfd.h>
 #include <unistd.h>
+#include <cstring>
 #include <cstdio>
 #include <cerrno>
 
@@ -32,16 +33,12 @@ static bool initEGLFunctions() {
 
 static EGLDisplay getEGLDisplay() {
     if (g_eglDisplay != EGL_NO_DISPLAY) return g_eglDisplay;
-
-    // 优先使用当前上下文中的 Display
     EGLDisplay dpy = eglGetCurrentDisplay();
     if (dpy != EGL_NO_DISPLAY) {
         g_eglDisplay = dpy;
         ANLAND_LOG("getEGLDisplay: from current context");
         return dpy;
     }
-
-    // 其次尝试默认 Display
     dpy = eglGetDisplay(EGL_DEFAULT_DISPLAY);
     if (dpy != EGL_NO_DISPLAY) {
         EGLint major, minor;
@@ -51,7 +48,6 @@ static EGLDisplay getEGLDisplay() {
             return dpy;
         }
     }
-
     ANLAND_ERR("getEGLDisplay: failed to get any display");
     return EGL_NO_DISPLAY;
 }
@@ -76,6 +72,7 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend) : m_backend(backend) {
         m_slots[i].framebuffer = 0;
         m_slots[i].texture = 0;
         m_slots[i].eglImage = EGL_NO_IMAGE_KHR;
+        m_slots[i].accumDamage = Hyprutils::Math::CRegion();
     }
 
     this->name = "anland-1";
@@ -198,13 +195,11 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 1. 确保 EGL 已初始化
     if (!ensureEGLInitialized()) {
         slot->failed = true;
         return false;
     }
 
-    // 2. 确保有 GL 上下文
     EGLContext currentCtx = eglGetCurrentContext();
     EGLContext tempCtx = EGL_NO_CONTEXT;
     bool needRestore = false;
@@ -242,11 +237,13 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 3. 获取 dmabuf fd 和信息
     int fd = get_dmabuf_fd_at(dpy, index);
     if (fd < 0) {
         ANLAND_ERR("importBuffer: get_dmabuf_fd_at failed for %d", index);
-        if (needRestore) { /* ... */ }
+        if (needRestore) {
+            eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            eglDestroyContext(g_eglDisplay, tempCtx);
+        }
         slot->failed = true;
         return false;
     }
@@ -255,12 +252,14 @@ bool CAnlandOutput::importBuffer(int index) {
     if (get_dmabuf_info_at(dpy, index, &info) < 0) {
         ANLAND_ERR("importBuffer: get_dmabuf_info_at failed for %d", index);
         close(fd);
-        if (needRestore) { /* ... */ }
+        if (needRestore) {
+            eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            eglDestroyContext(g_eglDisplay, tempCtx);
+        }
         slot->failed = true;
         return false;
     }
 
-    // 4. 保存信息
     if (slot->fd >= 0) close(slot->fd);
     slot->fd = dup(fd);
     close(fd);
@@ -283,7 +282,6 @@ bool CAnlandOutput::importBuffer(int index) {
                index, info.width, info.height, drmFmt,
                (unsigned long long)info.modifier);
 
-    // 5. 构建 EGLImage
     EGLint attribs[50];
     int idx = 0;
 
@@ -316,12 +314,14 @@ bool CAnlandOutput::importBuffer(int index) {
                                           EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
     if (slot->eglImage == EGL_NO_IMAGE_KHR) {
         ANLAND_ERR("importBuffer: eglCreateImageKHR failed, error=0x%x", eglGetError());
-        if (needRestore) { /* ... */ }
+        if (needRestore) {
+            eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            eglDestroyContext(g_eglDisplay, tempCtx);
+        }
         slot->failed = true;
         return false;
     }
 
-    // 6. 创建 GL 纹理
     glGenTextures(1, &slot->texture);
     glBindTexture(GL_TEXTURE_2D, slot->texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -332,7 +332,6 @@ bool CAnlandOutput::importBuffer(int index) {
     g_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, slot->eglImage);
     glBindTexture(GL_TEXTURE_2D, 0);
 
-    // 7. 创建 FBO
     glGenFramebuffers(1, &slot->framebuffer);
     glBindFramebuffer(GL_FRAMEBUFFER, slot->framebuffer);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
@@ -347,7 +346,6 @@ bool CAnlandOutput::importBuffer(int index) {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // 8. 创建 AnlandBuffer
     slot->buffer = CSharedPointer<CAnlandBuffer>(new CAnlandBuffer(dpy, index, m_backend));
     slot->imported = true;
     slot->hasDamage = true;
@@ -356,7 +354,6 @@ bool CAnlandOutput::importBuffer(int index) {
     slot->rendered = false;
     slot->failed = false;
 
-    // 9. 恢复上下文
     if (needRestore) {
         eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
         eglDestroyContext(g_eglDisplay, tempCtx);
@@ -454,7 +451,6 @@ bool CAnlandOutput::beginRender() {
 
     std::lock_guard<std::mutex> lock(m_bufferMutex);
 
-    // 获取缓冲区数量
     if (m_bufferCount == 0) {
         int count = get_buf_count(dpy);
         if (count > 0 && count <= MAX_BUFS) {
@@ -467,7 +463,6 @@ bool CAnlandOutput::beginRender() {
         }
     }
 
-    // 选择可用槽位
     if (m_selectedIndex < 0 || m_selectedIndex >= m_bufferCount) {
         bool found = false;
         for (int i = 0; i < m_bufferCount; i++) {
@@ -495,7 +490,6 @@ bool CAnlandOutput::beginRender() {
 
     auto* slot = &m_slots[m_selectedIndex];
 
-    // 确保已导入
     if (!slot->imported && !slot->failed) {
         if (!importBuffer(m_selectedIndex)) {
             ANLAND_ERR("beginRender: importBuffer failed for %d", m_selectedIndex);
@@ -508,11 +502,9 @@ bool CAnlandOutput::beginRender() {
         return false;
     }
 
-    // 标记状态
     slot->rendered = false;
     slot->inUse = true;
 
-    // 绑定 FBO
     glBindFramebuffer(GL_FRAMEBUFFER, slot->framebuffer);
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
@@ -585,7 +577,6 @@ bool CAnlandOutput::commit() {
         return true;
     }
 
-    // 触发刷新
     int ret = trigger_refresh(dpy);
     if (ret < 0) {
         ANLAND_ERR("commit: trigger_refresh failed");
@@ -699,7 +690,8 @@ void CAnlandOutput::scheduleFrame(scheduleFrameReason reason) {
     events.needsFrame.emit();
 
     if (!m_frameIdle) {
-        m_frameIdle = makeShared<std::function<void(void)>>([this]() {
+        // 修复：使用完整的命名空间
+        m_frameIdle = Hyprutils::Memory::makeShared<std::function<void(void)>>([this]() {
             m_frameScheduled = false;
             if (m_destroying || m_inFallback || !m_outputReady) {
                 ANLAND_LOG("scheduleFrame idle: skipped");

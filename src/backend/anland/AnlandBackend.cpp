@@ -153,7 +153,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
 
     if (m_reconnectTimerFd < 0 && m_inFallback) setupReconnectTimer();
     if (m_reconnectTimerFd >= 0) {
-        auto pfd = makeShared<SPollFD>();
+        auto pfd = Hyprutils::Memory::makeShared<SPollFD>();  // 修复：完整命名空间
         pfd->fd = m_reconnectTimerFd;
         pfd->onSignal = [weakSelf]() {
             auto self = weakSelf.lock();
@@ -167,7 +167,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
         int bufFd = get_buffer_ready_fd(m_display);
 
         if (dataFd >= 0) {
-            auto pfd = makeShared<SPollFD>();
+            auto pfd = Hyprutils::Memory::makeShared<SPollFD>();  // 修复：完整命名空间
             pfd->fd = dataFd;
             pfd->onSignal = [weakSelf]() {
                 auto self = weakSelf.lock();
@@ -178,7 +178,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
         }
 
         if (bufFd >= 0) {
-            auto pfd = makeShared<SPollFD>();
+            auto pfd = Hyprutils::Memory::makeShared<SPollFD>();  // 修复：完整命名空间
             pfd->fd = bufFd;
             pfd->onSignal = [weakSelf]() {
                 auto self = weakSelf.lock();
