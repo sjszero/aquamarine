@@ -298,7 +298,7 @@ jobs:
           cd /tmp/aqua-install
           mkdir -p DEBIAN
           cat > DEBIAN/control << 'EOF'
-          Package: libaquamarine10
+          Package: libaquamarine11
           Version: 0.11.0-anland1
           Architecture: arm64
           Maintainer: sjszero <sjszero@github.com>
@@ -321,7 +321,7 @@ jobs:
           find usr -type f -exec chmod 644 {} \;
           find usr/lib -name '*.so*' -exec chmod 755 {} \; 2>/dev/null || true
           cd /
-          dpkg-deb --build /tmp/aqua-install /libaquamarine10_0.11.0-anland1_arm64.deb
+          dpkg-deb --build /tmp/aqua-install /libaquamarine11_0.11.0-anland1_arm64.deb
 
       # ---------- 16. 安装 Aquamarine .deb ----------
       - name: Install Aquamarine .deb
