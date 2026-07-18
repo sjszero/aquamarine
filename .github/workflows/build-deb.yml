@@ -106,8 +106,6 @@ jobs:
           hwdata
           # PipeWire 音频/摄像头支持
           libpipewire-0.3-dev libspa-0.2-dev
-          # epoll-shim (timerfd 备选)
-          libepoll-shim-dev
           EOF
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
           echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
@@ -152,8 +150,7 @@ jobs:
             libre2-dev libmuparser-dev liblcms2-dev \
             liblua5.4-dev \
             hwdata \
-            libpipewire-0.3-dev libspa-0.2-dev \
-            libepoll-shim-dev
+            libpipewire-0.3-dev libspa-0.2-dev
 
       # ==========================================================
       # 5. 从 backports 安装较新的依赖
