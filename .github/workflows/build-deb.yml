@@ -78,6 +78,10 @@ jobs:
           devscripts build-essential fakeroot dpkg-dev quilt debhelper-compat
           cmake pkg-config git wget curl ca-certificates gnupg
           libxkbcommon-dev wayland-protocols
+          libgles-dev libegl-dev libgl-dev libgl1-mesa-dev libegl1-mesa-dev
+          libgles2-mesa-dev mesa-common-dev
+          libseat-dev libinput-dev libwayland-dev libpixman-1-dev
+          libdrm-dev libgbm-dev libudev-dev libdisplay-info-dev
           EOF
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
           echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
@@ -97,21 +101,31 @@ jobs:
             apt-all-${{ runner.arch }}-
 
       # ==========================================================
-      # 4. 安装基础构建工具
+      # 4. 安装基础构建工具和依赖
       # ==========================================================
-      - name: Install base tools
+      - name: Install base tools and dependencies
         run: |
           apt-get install -y --no-install-recommends \
             devscripts build-essential fakeroot dpkg-dev quilt \
-            cmake pkg-config git wget curl ca-certificates gnupg
+            cmake pkg-config git wget curl ca-certificates gnupg \
+            libgles-dev libegl-dev libgl-dev libgl1-mesa-dev \
+            libegl1-mesa-dev libgles2-mesa-dev mesa-common-dev \
+            libseat-dev libinput-dev libwayland-dev libpixman-1-dev \
+            libdrm-dev libgbm-dev libudev-dev libdisplay-info-dev \
+            libxkbcommon-dev wayland-protocols \
+            libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev \
+            libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev \
+            libxcb-errors-dev libxrender-dev libxcomposite-dev \
+            libxfixes-dev libxext-dev
 
       # ==========================================================
-      # 5. 从 backports 安装较新的依赖
+      # 5. 从 backports 安装较新的依赖（如有需要）
       # ==========================================================
       - name: Install backports dependencies
         run: |
           apt-get install -y -t trixie-backports --no-install-recommends \
-            libxkbcommon-dev wayland-protocols \
+            libxkbcommon-dev wayland-protocols libdisplay-info-dev \
+            libinput-dev \
             || echo "Some backports packages may already be installed"
 
       # ==========================================================
@@ -202,6 +216,7 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
+            -DCMAKE_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/usr/lib" \
             -DENABLE_ANLAND=ON \
             -DANLAND_SOCKET="/run/display.sock"
           make -j$(nproc)
