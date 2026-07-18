@@ -119,7 +119,7 @@ jobs:
             libxfixes-dev libxext-dev
 
       # ==========================================================
-      # 5. 从 backports 安装较新的依赖（如有需要）
+      # 5. 从 backports 安装较新的依赖
       # ==========================================================
       - name: Install backports dependencies
         run: |
@@ -129,7 +129,38 @@ jobs:
             || echo "Some backports packages may already be installed"
 
       # ==========================================================
-      # 6. 检出仓库（获取补丁）
+      # 6. 构建 hyprwayland-scanner（Aquamarine 依赖）
+      # ==========================================================
+      - name: Cache hyprwayland-scanner
+        id: scanner-cache
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/bin/hyprwayland-scanner
+          key: scanner-${{ runner.arch }}
+
+      - name: Build hyprwayland-scanner
+        if: steps.scanner-cache.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp
+          rm -rf hyprwayland-scanner
+          git clone --depth 1 https://github.com/hyprwm/hyprwayland-scanner.git
+          cd hyprwayland-scanner
+          mkdir -p build && cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          make -j$(nproc)
+          make install
+
+      - name: Verify hyprwayland-scanner
+        run: |
+          which hyprwayland-scanner || echo "hyprwayland-scanner not in PATH"
+          hyprwayland-scanner --version 2>/dev/null || true
+          # 确保 CMake 能找到
+          export PATH=/usr/local/bin:$PATH
+          echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
+
+      # ==========================================================
+      # 7. 检出仓库（获取补丁）
       # ==========================================================
       - name: Checkout repository (for hyprland patch)
         uses: actions/checkout@v4
@@ -137,7 +168,7 @@ jobs:
           fetch-depth: 1
 
       # ==========================================================
-      # 7. 验证补丁文件
+      # 8. 验证补丁文件
       # ==========================================================
       - name: Verify patch file
         id: patch-hash
@@ -153,7 +184,7 @@ jobs:
           fi
 
       # ==========================================================
-      # 8. 清理缓存（如果请求）
+      # 9. 清理缓存（如果请求）
       # ==========================================================
       - name: Clean caches if requested
         if: inputs.clean_cache == true
@@ -173,7 +204,7 @@ jobs:
         if: inputs.skip_aquamarine != true
         run: echo "Starting Aquamarine build..."
 
-      # ---------- 9. 克隆 Aquamarine ----------
+      # ---------- 10. 克隆 Aquamarine ----------
       - name: Clone Aquamarine (Anland) from GitHub
         if: inputs.skip_aquamarine != true
         uses: actions/checkout@v4
@@ -183,7 +214,7 @@ jobs:
           path: aquamarine
           fetch-depth: 1
 
-      # ---------- 10. 获取 Aquamarine commit ----------
+      # ---------- 11. 获取 Aquamarine commit ----------
       - name: Get Aquamarine commit
         id: aqua-commit
         if: inputs.skip_aquamarine != true
@@ -193,7 +224,7 @@ jobs:
           COMMIT=$(git rev-parse HEAD)
           echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
 
-      # ---------- 11. Aquamarine 构建缓存 ----------
+      # ---------- 12. Aquamarine 构建缓存 ----------
       - name: Cache Aquamarine build
         id: aqua-build-cache
         if: inputs.skip_aquamarine != true
@@ -207,7 +238,7 @@ jobs:
             aqua-build-${{ steps.aqua-commit.outputs.commit }}-
             aqua-build-
 
-      # ---------- 12. 构建 Aquamarine ----------
+      # ---------- 13. 构建 Aquamarine ----------
       - name: Build Aquamarine (Anland)
         if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
         run: |
@@ -217,12 +248,13 @@ jobs:
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
             -DCMAKE_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/usr/lib" \
+            -DCMAKE_PREFIX_PATH="/usr/local:/usr" \
             -DENABLE_ANLAND=ON \
             -DANLAND_SOCKET="/run/display.sock"
           make -j$(nproc)
           make install DESTDIR=/tmp/aqua-install
 
-      # ---------- 13. 打包 Aquamarine .deb ----------
+      # ---------- 14. 打包 Aquamarine .deb ----------
       - name: Package Aquamarine .deb
         if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
         run: |
@@ -254,7 +286,7 @@ jobs:
           cd /
           dpkg-deb --build /tmp/aqua-install /libaquamarine10_0.11.0-anland1_arm64.deb
 
-      # ---------- 14. 安装 Aquamarine .deb ----------
+      # ---------- 15. 安装 Aquamarine .deb ----------
       - name: Install Aquamarine .deb
         if: inputs.skip_aquamarine != true
         run: |
@@ -284,7 +316,7 @@ jobs:
         if: inputs.skip_hyprland != true
         run: echo "Starting Hyprland build..."
 
-      # ---------- 15. Hyprland 源码缓存 ----------
+      # ---------- 16. Hyprland 源码缓存 ----------
       - name: Cache Hyprland source
         id: hypr-src-cache
         if: inputs.skip_hyprland != true
@@ -296,13 +328,13 @@ jobs:
             src-hypr-${{ inputs.hyprland_version }}-
             src-hypr-
 
-      # ---------- 16. 获取 Hyprland Debian 源码 ----------
+      # ---------- 17. 获取 Hyprland Debian 源码 ----------
       - name: Fetch Hyprland source
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
           apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
 
-      # ---------- 17. 应用 Hyprland Anland 补丁 ----------
+      # ---------- 18. 应用 Hyprland Anland 补丁 ----------
       - name: Apply Anland patch to Hyprland
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -317,7 +349,7 @@ jobs:
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
 
-      # ---------- 18. 修改 Hyprland changelog ----------
+      # ---------- 19. 修改 Hyprland changelog ----------
       - name: Bump Hyprland changelog
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -331,7 +363,7 @@ jobs:
             echo "Hypr changelog already has +anland1 suffix, skipping"
           fi
 
-      # ---------- 19. 安装 Hyprland build-dep ----------
+      # ---------- 20. 安装 Hyprland build-dep ----------
       - name: Install Hyprland build dependencies
         if: inputs.skip_hyprland != true
         run: |
@@ -346,7 +378,7 @@ jobs:
             apt-get build-dep -y ./
           }
 
-      # ---------- 20. 构建 Hyprland .deb ----------
+      # ---------- 21. 构建 Hyprland .deb ----------
       - name: Build Hyprland .deb
         if: inputs.skip_hyprland != true
         run: |
@@ -354,7 +386,7 @@ jobs:
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
       # ==========================================================
-      # 21. 收集 artifacts
+      # 22. 收集 artifacts
       # ==========================================================
       - name: Collect artifacts
         shell: bash
@@ -390,7 +422,7 @@ jobs:
           ls -la artifacts/
 
       # ==========================================================
-      # 22. 上传 artifacts
+      # 23. 上传 artifacts
       # ==========================================================
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -400,7 +432,7 @@ jobs:
           retention-days: 7
 
       # ==========================================================
-      # 23. 构建摘要
+      # 24. 构建摘要
       # ==========================================================
       - name: Summary
         run: |
@@ -409,6 +441,7 @@ jobs:
           echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| APT Cache | ${{ steps.apt-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| hyprwayland-scanner | ${{ steps.scanner-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Aquamarine Build | ${{ steps.aqua-build-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Hyprland Source | ${{ steps.hypr-src-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
