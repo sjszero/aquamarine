@@ -308,7 +308,8 @@ diff --git a/src/render/GLRenderer.cpp b/src/render/GLRenderer.cpp
          Log::logger->log(Log::ERR, "getOrCreateRenderbuffer failed for {}", NFormatUtils::drmFormatName(fmt));
          return false;
      }
- 
+-
++
 +    // ---- Anland: 虚拟显示完全跳过 renderbuffer ----
 +    if (m_renderData.pMonitor && m_renderData.pMonitor->m_isVirtualDisplay) {
 +        Log::logger->log(Log::TRACE,
