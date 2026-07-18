@@ -32,7 +32,7 @@ jobs:
 
     steps:
       # ==========================================================
-      # 1. 设置 Debian 源（优先使用 backports）
+      # 1. 设置 Debian 源
       # ==========================================================
       - name: Setup sources
         run: |
@@ -46,9 +46,7 @@ jobs:
           deb-src http://deb.debian.org/debian-security trixie-security main
           deb-src http://deb.debian.org/debian trixie-backports main
           EOF
-          # 删除可能存在的重复源文件
           rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
-          # 配置 APT 优先从 backports 安装
           cat > /etc/apt/apt.conf.d/99backports << 'EOF'
           APT::Default-Release "trixie";
           EOF
@@ -96,18 +94,16 @@ jobs:
       # ==========================================================
       - name: Install backports dependencies
         run: |
-          # 从 backports 安装 libxkbcommon-dev 和 wayland-protocols
           apt-get install -y -t trixie-backports --no-install-recommends \
             libxkbcommon-dev wayland-protocols \
             || echo "Some backports packages may already be installed"
 
       # ==========================================================
-      # 6. 检出仓库（获取补丁）
+      # 6. 检出仓库（获取补丁，直接检出到当前目录）
       # ==========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          path: repo
           fetch-depth: 1
 
       # ==========================================================
@@ -116,15 +112,15 @@ jobs:
       - name: Generate patch hash
         id: patch-hash
         run: |
-          if [ -f "repo/${{ env.HYPR_PATCH }}" ]; then
-            HASH=$(sha256sum "repo/${{ env.HYPR_PATCH }}" | cut -c1-16)
+          if [ -f "${{ github.workspace }}/${{ env.HYPR_PATCH }}" ]; then
+            HASH=$(sha256sum "${{ github.workspace }}/${{ env.HYPR_PATCH }}" | cut -c1-16)
           else
             HASH="no-patch"
           fi
           echo "hypr_patch_hash=${HASH}" >> $GITHUB_OUTPUT
 
       # ==========================================================
-      # 第一部分：构建 Aquamarine（Anland 版本，源码已包含）
+      # 第一部分：构建 Aquamarine
       # ==========================================================
 
       # ---------- 8. Aquamarine 源码缓存 ----------
@@ -149,7 +145,6 @@ jobs:
         run: |
           SRCDIR=$(find . -maxdepth 1 -type d -name "${{ env.AQUA_SRC }}-*" | head -1)
           echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
-          echo "srcdir=${SRCDIR}"
 
       # ---------- 10. 修改 Aquamarine changelog ----------
       - name: Bump Aquamarine changelog
@@ -176,12 +171,11 @@ jobs:
       # ---------- 13. 安装 Aquamarine .deb ----------
       - name: Install Aquamarine .deb
         run: |
-          ls -la ./*aquamarine*.deb 2>/dev/null || echo "No aquamarine debs found"
           dpkg -i ./*aquamarine*.deb || apt-get install -f -y
           dpkg -i ./*aquamarine*.deb
 
       # ==========================================================
-      # 第二部分：构建 Hyprland（打 Anland 补丁）
+      # 第二部分：构建 Hyprland
       # ==========================================================
 
       # ---------- 14. Hyprland 源码缓存 ----------
@@ -212,14 +206,16 @@ jobs:
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
-          PATCH_FILE="${{ github.workspace }}/repo/${{ env.HYPR_PATCH }}"
+          PATCH_FILE="${{ github.workspace }}/${{ env.HYPR_PATCH }}"
           if [ -f "$PATCH_FILE" ]; then
-            echo "Applying ${{ env.HYPR_PATCH }}..."
+            echo "Applying ${{ env.HYPR_PATCH }} from $PATCH_FILE..."
             patch -p1 --forward --reject-file=- < "$PATCH_FILE" || {
               echo "Patch may already be applied, continuing..."
             }
           else
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
+            echo "Files in workspace:"
+            ls -la "${{ github.workspace }}/" || true
           fi
 
       # ---------- 17. 修改 Hyprland changelog ----------
@@ -232,20 +228,17 @@ jobs:
           dch --newversion "$NEW_VER" "Add Anland backend support (CI build)"
           echo "Hypr version: $NEW_VER"
 
-      # ---------- 18. 安装 Hyprland build-dep（从 backports 解决依赖） ----------
+      # ---------- 18. 安装 Hyprland build-dep ----------
       - name: Install Hyprland build dependencies
         run: |
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
-          # 先尝试直接安装 build-dep
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
-            # 如果失败，尝试从 backports 安装缺失的依赖
             apt-get install -y -t trixie-backports --no-install-recommends \
               libxkbcommon-dev wayland-protocols libdisplay-info-dev \
               libinput-dev hyprwayland-scanner hyprutils-dev \
               hyprlang-dev hyprcursor-dev hyprgraphics-dev \
               || echo "Some packages may already be installed"
-            # 再次尝试
             apt-get build-dep -y ./
           }
 
@@ -255,22 +248,46 @@ jobs:
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
-      # ---------- 20. 收集所有 .deb ----------
-      - name: Collect all artifacts
+      # ==========================================================
+      # 20. 过滤并收集需要的 .deb 文件
+      # ==========================================================
+      - name: Collect filtered artifacts
         run: |
           mkdir -p artifacts
-          find . -maxdepth 1 -name "*.deb" -exec cp {} artifacts/ \;
+
+          find . -maxdepth 1 -name "*.deb" -type f | while read -r deb; do
+            filename=$(basename "$deb")
+            if echo "$filename" | grep -q "^libaquamarine10_.*\.deb$"; then
+              cp "$deb" artifacts/
+              echo "✅ Kept: $filename"
+            elif echo "$filename" | grep -q "^hyprland_[0-9].*\.deb$" && ! echo "$filename" | grep -q "dbgsym\|dev"; then
+              cp "$deb" artifacts/
+              echo "✅ Kept: $filename"
+            elif echo "$filename" | grep -q "^hyprland-backgrounds_.*\.deb$" && ! echo "$filename" | grep -q "dbgsym"; then
+              cp "$deb" artifacts/
+              echo "✅ Kept: $filename"
+            else
+              echo "⏭️ Skipped: $filename"
+            fi
+          done
+
+          echo ""
+          echo "=== Final artifacts ==="
           ls -la artifacts/
 
-      # ---------- 21. 上传所有 .deb ----------
-      - name: Upload all debs
+      # ==========================================================
+      # 21. 上传 artifacts
+      # ==========================================================
+      - name: Upload filtered debs
         uses: actions/upload-artifact@v4
         with:
           name: anland-debs
           path: artifacts/*.deb
           retention-days: 7
 
-      # ---------- 22. 构建摘要 ----------
+      # ==========================================================
+      # 22. 构建摘要
+      # ==========================================================
       - name: Summary
         run: |
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
@@ -282,11 +299,12 @@ jobs:
           echo "| Hyprland Source | ${{ steps.hypr-src-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "- Aquamarine: \`libaquamarine*_*+anland1_arm64.deb\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Hyprland: \`hyprland_*+anland1_arm64.deb\`" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ls -la artifacts/ >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No artifacts found" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Install" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "sudo dpkg -i libaquamarine*.deb hyprland*.deb" >> $GITHUB_STEP_SUMMARY
+          echo "sudo dpkg -i libaquamarine10_*.deb hyprland_*.deb hyprland-backgrounds_*.deb" >> $GITHUB_STEP_SUMMARY
           echo "sudo apt-get install -f -y" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
