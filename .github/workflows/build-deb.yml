@@ -47,7 +47,7 @@ jobs:
 
     steps:
       # ==========================================================
-      # 1. 设置 Debian 源
+      # 1. 设置 Debian 源（包含 sid）
       # ==========================================================
       - name: Setup sources
         run: |
@@ -56,12 +56,15 @@ jobs:
           deb http://deb.debian.org/debian trixie-updates main
           deb http://deb.debian.org/debian-security trixie-security main
           deb http://deb.debian.org/debian trixie-backports main
+          deb http://deb.debian.org/debian sid main
           deb-src http://deb.debian.org/debian trixie main
           deb-src http://deb.debian.org/debian trixie-updates main
           deb-src http://deb.debian.org/debian-security trixie-security main
           deb-src http://deb.debian.org/debian trixie-backports main
+          deb-src http://deb.debian.org/debian sid main
           EOF
           rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+          # 设置 APT 默认使用 trixie，但可以从 sid 安装特定包
           cat > /etc/apt/apt.conf.d/99backports << 'EOF'
           APT::Default-Release "trixie";
           EOF
@@ -85,8 +88,6 @@ jobs:
           libwayland-dev wayland-protocols
           # 输入/显示
           libseat-dev libinput-dev libudev-dev
-          libdisplay-info-dev
-          libdisplay-info3
           # DRM/GBM
           libdrm-dev libgbm-dev
           # X11 相关
@@ -97,7 +98,7 @@ jobs:
           libxfixes-dev libxext-dev libxcursor-dev
           # 图形/渲染
           libpixman-1-dev libcairo2-dev libpango1.0-dev libpangocairo-1.0-0
-          # Hyprland 生态库
+          # Hyprland 生态库（backports 中可用）
           libhyprutils-dev libhyprlang-dev libhyprcursor-dev libhyprgraphics-dev
           # 其他
           libpugixml-dev libtomlplusplus-dev
@@ -126,7 +127,7 @@ jobs:
             apt-all-${{ runner.arch }}-
 
       # ==========================================================
-      # 4. 安装所有依赖
+      # 4. 安装所有依赖（不包含 libdisplay-info，后面单独从 sid 安装）
       # ==========================================================
       - name: Install all dependencies
         run: |
@@ -151,44 +152,38 @@ jobs:
             hwdata
 
       # ==========================================================
-      # 5. 从 backports 安装较新的依赖
+      # 5. 从 backports 安装 Hyprland 生态库
       # ==========================================================
       - name: Install backports dependencies
         run: |
           apt-get install -y -t trixie-backports --no-install-recommends \
             libxkbcommon-dev wayland-protocols \
-            libdisplay-info-dev libdisplay-info3 \
             libinput-dev \
             libhyprutils-dev libhyprlang-dev \
             libhyprcursor-dev libhyprgraphics-dev \
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "Some backports packages may already be installed"
+          
+          # 诊断：找到 hyprutils.pc 的实际位置
+          echo "=== Finding hyprutils.pc ==="
+          find /usr -name "hyprutils.pc" 2>/dev/null || echo "hyprutils.pc not found"
+          echo "=== Finding libdisplay-info.pc ==="
+          find /usr -name "libdisplay-info.pc" 2>/dev/null || echo "libdisplay-info.pc not found"
 
       # ==========================================================
-      # 6. 诊断并设置 pkg-config 路径（关键步骤）
+      # 6. 从 sid 安装 libdisplay-info（trixie 版本太旧）
       # ==========================================================
-      - name: Setup pkg-config for backports
-        id: setup-pkgconfig
-        shell: bash
+      - name: Install libdisplay-info from sid
         run: |
-          # 找到 hyprutils.pc 文件的位置
-          HYPRUTILS_PC=$(find /usr -name "hyprutils.pc" 2>/dev/null | head -1)
-          DISPLAY_INFO_PC=$(find /usr -name "libdisplay-info.pc" 2>/dev/null | head -1)
+          # libdisplay-info 在 trixie 中版本太旧 (0.2.0)，需要 >= 0.3.0
+          apt-get install -y -t sid --no-install-recommends \
+            libdisplay-info-dev libdisplay-info3 \
+            || echo "Failed to install libdisplay-info from sid"
           
-          echo "=== Found .pc files ==="
-          echo "hyprutils.pc: ${HYPRUTILS_PC}"
-          echo "libdisplay-info.pc: ${DISPLAY_INFO_PC}"
-          
-          # 提取目录
-          if [ -n "$HYPRUTILS_PC" ]; then
-            PC_DIR=$(dirname "$HYPRUTILS_PC")
-            echo "pc_dir=${PC_DIR}" >> $GITHUB_OUTPUT
-            echo "✅ hyprutils.pc found in: ${PC_DIR}"
-          else
-            # 如果没找到，使用默认路径
-            echo "pc_dir=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_OUTPUT
-            echo "⚠️ Using default pkgconfig path"
-          fi
+          # 验证安装
+          echo "=== libdisplay-info version ==="
+          pkg-config --modversion libdisplay-info 2>/dev/null || echo "libdisplay-info not found by pkg-config"
+          ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/libdisplay-info* 2>/dev/null || echo "No pc file"
 
       # ==========================================================
       # 7. 构建 hyprwayland-scanner（Aquamarine 依赖）
@@ -251,7 +246,6 @@ jobs:
           echo "🧹 Cleaning caches as requested..."
           rm -rf /tmp/aqua-install /tmp/hypr-install
           rm -rf aquamarine*/ hyprland*/
-          dpkg -r libaquamarine10 2>/dev/null || true
           apt-get clean
           rm -rf /var/lib/apt/lists/*
           apt-get update
@@ -298,23 +292,31 @@ jobs:
             aqua-build-${{ steps.aqua-commit.outputs.commit }}-
             aqua-build-
 
-      # ---------- 14. 构建 Aquamarine ----------
+      # ---------- 14. 构建 Aquamarine（关键：动态设置 PKG_CONFIG_PATH）----------
       - name: Build Aquamarine (Anland)
         if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
         run: |
           cd aquamarine
           mkdir -p build && cd build
-          # 关键：在同一个 shell 中设置 PKG_CONFIG_PATH
-          export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
-          # 测试是否能找到
-          pkg-config --modversion hyprutils || echo "hyprutils not found"
-          pkg-config --modversion libdisplay-info || echo "libdisplay-info not found"
+          
+          # 动态查找 .pc 文件路径
+          PC_PATHS=$(find /usr -name "*.pc" -exec dirname {} \; 2>/dev/null | sort -u | tr '\n' ':')
+          export PKG_CONFIG_PATH="${PC_PATHS}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
+          
+          echo "=== PKG_CONFIG_PATH ==="
+          echo "$PKG_CONFIG_PATH"
+          echo ""
+          echo "=== Testing pkg-config ==="
+          pkg-config --modversion hyprutils 2>/dev/null || echo "hyprutils not found"
+          pkg-config --modversion libdisplay-info 2>/dev/null || echo "libdisplay-info not found"
+          echo ""
+          echo "=== cmake command ==="
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
             -DCMAKE_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/local/lib" \
             -DCMAKE_INCLUDE_PATH="/usr/include:/usr/local/include" \
-            -DCMAKE_PREFIX_PATH="/usr/local:/usr:/usr/lib/aarch64-linux-gnu/pkgconfig" \
+            -DCMAKE_PREFIX_PATH="/usr/local:/usr" \
             -DENABLE_ANLAND=ON \
             -DANLAND_SOCKET="/run/display.sock"
           make -j$(nproc)
@@ -356,9 +358,9 @@ jobs:
       - name: Install Aquamarine .deb
         if: inputs.skip_aquamarine != true
         run: |
-          dpkg -r libaquamarine10 2>/dev/null || true
-          dpkg -r libaquamarine11 2>/dev/null || true
-          apt-get install -y -t trixie-backports --no-install-recommends libdisplay-info3 || true
+          # 先确保运行时依赖已安装（从 sid）
+          apt-get install -y -t sid --no-install-recommends libdisplay-info3 || \
+            apt-get install -y --no-install-recommends libdisplay-info3 || true
           if [ -f /libaquamarine10_*.deb ]; then
             dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine10_*.deb
@@ -437,15 +439,10 @@ jobs:
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
-          apt-get install -y --no-install-recommends \
-            libdisplay-info3 libhyprutils-dev libhyprlang-dev \
-            libhyprcursor-dev libhyprgraphics-dev libinput-dev \
-            libxkbcommon-dev wayland-protocols || true
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
               libxkbcommon-dev wayland-protocols \
-              libdisplay-info-dev libdisplay-info3 \
               libinput-dev \
               libhyprutils-dev libhyprlang-dev \
               libhyprcursor-dev libhyprgraphics-dev \
