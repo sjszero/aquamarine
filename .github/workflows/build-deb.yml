@@ -141,7 +141,7 @@ jobs:
             || echo "Failed to install libdisplay-info from sid"
 
       # ==========================================================
-      # 构建 hyprwayland-scanner（包含 CMake 配置文件）
+      # 构建 hyprwayland-scanner
       # ==========================================================
       - name: Cache hyprwayland-scanner
         id: scanner-cache
@@ -165,18 +165,14 @@ jobs:
             -DCMAKE_INSTALL_LIBDIR=lib
           make -j$(nproc)
           make install
-          # 确保 CMake 配置文件被安装
           ls -la /usr/local/lib/cmake/hyprwayland-scanner/ 2>/dev/null || echo "Config files not found"
 
       - name: Verify hyprwayland-scanner
         run: |
           export PATH=/usr/local/bin:$PATH
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
-          # 设置 CMAKE_PREFIX_PATH 让 CMake 能找到 hyprwayland-scanner
           echo "CMAKE_PREFIX_PATH=/usr/local:/usr" >> $GITHUB_ENV
           hyprwayland-scanner --version 2>/dev/null || true
-          # 检查 CMake 配置文件
-          ls -la /usr/local/lib/cmake/hyprwayland-scanner/ 2>/dev/null || echo "Config files not found"
 
       - name: Checkout repository (for hyprland patch)
         uses: actions/checkout@v4
@@ -254,7 +250,6 @@ jobs:
           mkdir -p build && cd build
           PC_PATHS=$(find /usr -name "*.pc" -exec dirname {} \; 2>/dev/null | sort -u | tr '\n' ':')
           export PKG_CONFIG_PATH="${PC_PATHS}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
-          # 设置 CMAKE_PREFIX_PATH 让 CMake 能找到 hyprwayland-scanner
           export CMAKE_PREFIX_PATH="/usr/local:/usr"
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
@@ -351,11 +346,10 @@ jobs:
         run: |
           apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
 
-      - name: Apply Anland patch and modify debian/rules
+      - name: Apply Anland patch
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
-          # 应用 Anland 补丁
           PATCH_FILE="../${{ env.HYPR_PATCH }}"
           if [ -f "$PATCH_FILE" ]; then
             echo "Applying ${{ env.HYPR_PATCH }}..."
@@ -365,14 +359,6 @@ jobs:
           else
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
-          
-          # 修改 debian/rules，跳过 dh_shlibdeps 的 libaquamarine 检查
-          echo "Modifying debian/rules to skip libaquamarine shlibdeps..."
-          cat >> debian/rules << 'EOF'
-          
-          override_dh_shlibdeps:
-          \tdh_shlibdeps --dpkg-shlibdeps-params="-l/usr/lib/aarch64-linux-gnu" || true
-          EOF
 
       - name: Bump Hyprland changelog
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
@@ -387,17 +373,26 @@ jobs:
             echo "Hypr changelog already has +anland1 suffix, skipping"
           fi
 
+      # ---------- 关键步骤：创建 shlibs.local ----------
+      - name: Create shlibs.local to resolve libaquamarine dependency
+        if: inputs.skip_hyprland != true
+        run: |
+          cd ./${{ env.HYPR_SRC }}-*/
+          mkdir -p debian
+          cat > debian/shlibs.local << 'EOF'
+          libaquamarine 11 libaquamarine11 (>= 0.11.0)
+          EOF
+          echo "✅ Created debian/shlibs.local"
+
       - name: Install Hyprland build dependencies
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
-          # 移除任何残留的 Aquamarine 包
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
           apt autoremove -y || true
 
-          # 安装 build-dep
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
@@ -410,13 +405,11 @@ jobs:
             apt-get build-dep -y ./
           }
 
-          # 移除 build-dep 安装的 sid Aquamarine
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
           apt autoremove -y || true
 
-          # 重新安装我们自己构建的 Aquamarine
           if [ -f /libaquamarine11_*.deb ]; then
             dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine11_*.deb
@@ -431,8 +424,7 @@ jobs:
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
           ldconfig
-          export DPKG_SHLIBDEPS_OPTIONS="-l/usr/lib/aarch64-linux-gnu:/usr/lib:/lib/aarch64-linux-gnu"
-          # 使用 -d 跳过依赖检查，-j$(nproc) 并行构建
+          # -d 跳过依赖检查，但 shlibs.local 会让 dpkg-shlibdeps 正确识别
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
       # ==========================================================
