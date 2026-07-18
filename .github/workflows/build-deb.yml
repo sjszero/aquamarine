@@ -86,6 +86,8 @@ jobs:
           # 输入/显示
           libseat-dev libinput-dev libudev-dev
           libdisplay-info-dev
+          # 运行时库（避免依赖问题）
+          libdisplay-info3
           # DRM/GBM
           libdrm-dev libgbm-dev
           # X11 相关
@@ -125,7 +127,7 @@ jobs:
             apt-all-${{ runner.arch }}-
 
       # ==========================================================
-      # 4. 安装所有依赖（包含 PipeWire）
+      # 4. 安装所有依赖（包含运行时库）
       # ==========================================================
       - name: Install all dependencies
         run: |
@@ -136,7 +138,7 @@ jobs:
             libegl1-mesa-dev libgles2-mesa-dev mesa-common-dev \
             libwayland-dev wayland-protocols \
             libseat-dev libinput-dev libudev-dev \
-            libdisplay-info-dev \
+            libdisplay-info-dev libdisplay-info3 \
             libdrm-dev libgbm-dev \
             libxkbcommon-dev \
             libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev \
@@ -159,6 +161,7 @@ jobs:
         run: |
           apt-get install -y -t trixie-backports --no-install-recommends \
             libxkbcommon-dev wayland-protocols libdisplay-info-dev \
+            libdisplay-info3 \
             libinput-dev libhyprutils-dev libhyprlang-dev \
             libhyprcursor-dev libhyprgraphics-dev \
             libpipewire-0.3-dev libspa-0.2-dev \
@@ -325,6 +328,8 @@ jobs:
       - name: Install Aquamarine .deb
         if: inputs.skip_aquamarine != true
         run: |
+          # 先确保运行时依赖已安装
+          apt-get install -y --no-install-recommends libdisplay-info3 || true
           if [ -f /libaquamarine10_*.deb ]; then
             dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine10_*.deb
@@ -407,6 +412,7 @@ jobs:
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
               libxkbcommon-dev wayland-protocols libdisplay-info-dev \
+              libdisplay-info3 \
               libinput-dev libhyprutils-dev libhyprlang-dev \
               libhyprcursor-dev libhyprgraphics-dev \
               libpipewire-0.3-dev libspa-0.2-dev \
