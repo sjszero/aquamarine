@@ -16,7 +16,6 @@ on:
 env:
   DEBIAN_FRONTEND: noninteractive
   SOURCE_PKG: aquamarine
-  PATCH_FILE: aquamarine-anland.patch
 
 jobs:
   build-aquamarine:
@@ -71,35 +70,18 @@ jobs:
             devscripts build-essential fakeroot dpkg-dev quilt \
             cmake pkg-config git wget curl ca-certificates gnupg
 
-      # ---------- 5. 检出仓库（获取补丁文件） ----------
-      - name: Checkout repository for patches
-        uses: actions/checkout@v4
-        with:
-          path: repo
-          fetch-depth: 1
-
-      # ---------- 6. 生成补丁哈希 ----------
-      - name: Generate patch hash
-        id: patch-hash
-        run: |
-          if [ -f "repo/patches/${{ env.PATCH_FILE }}" ]; then
-            HASH=$(sha256sum "repo/patches/${{ env.PATCH_FILE }}" | cut -c1-16)
-          else
-            HASH="no-patch"
-          fi
-          echo "patch_hash=${HASH}" >> $GITHUB_OUTPUT
-
-      # ---------- 7. 源码缓存 ----------
+      # ---------- 5. 源码缓存 ----------
       - name: Cache Aquamarine source tree
         id: src-cache
         uses: actions/cache@v4
         with:
           path: ${{ env.SOURCE_PKG }}-*
-          key: src-aqua-${{ inputs.aquamarine_version }}-${{ steps.patch-hash.outputs.patch_hash }}
+          key: src-aqua-${{ inputs.aquamarine_version }}
           restore-keys: |
             src-aqua-${{ inputs.aquamarine_version }}-
+            src-aqua-
 
-      # ---------- 8. 获取源码（如果缓存未命中） ----------
+      # ---------- 6. 获取源码（如果缓存未命中） ----------
       - name: Fetch Aquamarine source
         if: steps.src-cache.outputs.cache-hit != 'true'
         run: |
@@ -111,51 +93,36 @@ jobs:
           SRCDIR=$(find . -maxdepth 1 -type d -name "${{ env.SOURCE_PKG }}-*" | head -1)
           echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
 
-      # ---------- 9. 应用 Anland 补丁（如果缓存未命中） ----------
-      - name: Apply Anland patch
-        if: steps.src-cache.outputs.cache-hit != 'true'
-        run: |
-          cd ${{ steps.find-src.outputs.srcdir }}
-          PATCH_FILE="${{ github.workspace }}/repo/patches/${{ env.PATCH_FILE }}"
-          if [ -f "$PATCH_FILE" ]; then
-            echo "Applying ${{ env.PATCH_FILE }}..."
-            patch -p1 --forward --reject-file=- < "$PATCH_FILE" || {
-              echo "Patch may already be applied, continuing..."
-            }
-          else
-            echo "⚠️ No patch file found, skipping"
-          fi
-
-      # ---------- 10. 修改 changelog 添加本地版本后缀 ----------
+      # ---------- 7. 修改 changelog 添加本地版本后缀 ----------
       - name: Bump changelog (add +anland1)
         if: steps.src-cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.find-src.outputs.srcdir }}
           VER=$(dpkg-parsechangelog --show-field Version)
           NEW_VER="${VER}+anland1"
-          dch --newversion "$NEW_VER" "Add Anland backend support (CI build)"
+          dch --newversion "$NEW_VER" "CI build with Anland backend"
           echo "New version: $NEW_VER"
 
-      # ---------- 11. 安装构建依赖 ----------
+      # ---------- 8. 安装构建依赖 ----------
       - name: Install build dependencies
         run: |
           cd ${{ steps.find-src.outputs.srcdir }}
           apt-get build-dep -y ./ || apt-get build-dep -y ${{ env.SOURCE_PKG }}
 
-      # ---------- 12. 构建 .deb ----------
+      # ---------- 9. 构建 .deb ----------
       - name: Build Aquamarine .deb
         run: |
           cd ${{ steps.find-src.outputs.srcdir }}
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
-      # ---------- 13. 收集 .deb 文件 ----------
+      # ---------- 10. 收集 .deb 文件 ----------
       - name: Collect .deb files
         run: |
           mkdir -p artifacts
           find . -maxdepth 1 -name "*.deb" -exec cp {} artifacts/ \;
           ls -la artifacts/
 
-      # ---------- 14. 上传 artifact ----------
+      # ---------- 11. 上传 artifact ----------
       - name: Upload Aquamarine debs
         uses: actions/upload-artifact@v4
         with:
