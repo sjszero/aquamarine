@@ -152,11 +152,6 @@ jobs:
             libhyprcursor-dev libhyprgraphics-dev \
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "Some backports packages may already be installed"
-          
-          echo "=== Finding hyprutils.pc ==="
-          find /usr -name "hyprutils.pc" 2>/dev/null || echo "hyprutils.pc not found"
-          echo "=== Finding libdisplay-info.pc ==="
-          find /usr -name "libdisplay-info.pc" 2>/dev/null || echo "libdisplay-info.pc not found"
 
       # ==========================================================
       # 6. 从 sid 安装 libdisplay-info
@@ -166,9 +161,6 @@ jobs:
           apt-get install -y -t sid --no-install-recommends \
             libdisplay-info-dev libdisplay-info3 \
             || echo "Failed to install libdisplay-info from sid"
-          
-          echo "=== libdisplay-info version ==="
-          pkg-config --modversion libdisplay-info 2>/dev/null || echo "libdisplay-info not found by pkg-config"
 
       # ==========================================================
       # 7. 构建 hyprwayland-scanner
@@ -286,18 +278,8 @@ jobs:
         run: |
           cd aquamarine
           mkdir -p build && cd build
-          
           PC_PATHS=$(find /usr -name "*.pc" -exec dirname {} \; 2>/dev/null | sort -u | tr '\n' ':')
           export PKG_CONFIG_PATH="${PC_PATHS}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
-          
-          echo "=== PKG_CONFIG_PATH ==="
-          echo "$PKG_CONFIG_PATH"
-          echo ""
-          echo "=== Testing pkg-config ==="
-          pkg-config --modversion hyprutils 2>/dev/null || echo "hyprutils not found"
-          pkg-config --modversion libdisplay-info 2>/dev/null || echo "libdisplay-info not found"
-          echo ""
-          echo "=== cmake command ==="
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
@@ -364,7 +346,7 @@ jobs:
               dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
               dpkg -i /libaquamarine10_*.deb
             else
-              echo "❌ No Aquamarine build found. Please build or provide pre-built package."
+              echo "❌ No Aquamarine build found."
               exit 1
             fi
           fi
@@ -423,17 +405,19 @@ jobs:
             echo "Hypr changelog already has +anland1 suffix, skipping"
           fi
 
-      # ---------- 21. 安装 Hyprland build-dep ----------
+      # ---------- 21. 安装 Hyprland build-dep（关键：先移除 sid 的 Aquamarine，再安装我们自己的）----------
       - name: Install Hyprland build dependencies
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
-          # 先卸载所有 Aquamarine 包
+          # 1. 先移除所有 Aquamarine 包（包括 dev 包）
           dpkg -r libaquamarine10 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
+          # 强制移除可能残留的头文件
+          rm -rf /usr/include/aquamarine 2>/dev/null || true
           
-          # 然后运行 build-dep
+          # 2. 运行 build-dep（会从 sid 安装 aquamarine-dev）
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
@@ -446,11 +430,13 @@ jobs:
             apt-get build-dep -y ./
           }
           
-          # 卸载 sid 安装的 Aquamarine（如果有）
+          # 3. 删除刚才 build-dep 安装的 Aquamarine（sid 版本）
+          dpkg -r libaquamarine10 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
+          rm -rf /usr/include/aquamarine 2>/dev/null || true
           
-          # 重新安装我们自己构建的 Aquamarine
+          # 4. 安装我们自己构建的 Aquamarine（包含 Anland）
           if [ -f /libaquamarine10_*.deb ]; then
             dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine10_*.deb
