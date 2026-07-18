@@ -82,6 +82,7 @@ jobs:
           libgles2-mesa-dev mesa-common-dev
           libseat-dev libinput-dev libwayland-dev libpixman-1-dev
           libdrm-dev libgbm-dev libudev-dev libdisplay-info-dev
+          libpugixml-dev libtomlplusplus-dev
           EOF
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
           echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
@@ -116,7 +117,8 @@ jobs:
             libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev \
             libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev \
             libxcb-errors-dev libxrender-dev libxcomposite-dev \
-            libxfixes-dev libxext-dev
+            libxfixes-dev libxext-dev \
+            libpugixml-dev libtomlplusplus-dev
 
       # ==========================================================
       # 5. 从 backports 安装较新的依赖
@@ -155,7 +157,6 @@ jobs:
         run: |
           which hyprwayland-scanner || echo "hyprwayland-scanner not in PATH"
           hyprwayland-scanner --version 2>/dev/null || true
-          # 确保 CMake 能找到
           export PATH=/usr/local/bin:$PATH
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
 

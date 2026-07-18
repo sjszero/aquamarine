@@ -34,7 +34,11 @@ CAnlandBuffer::CAnlandBuffer(display_ctx* display, int index, CAnlandBackend* ba
         return;
     }
 
-    this->size = Hyprutils::Math::Vector2D(info.width, info.height);
+    // 修复：显式转换 uint32_t 到 int 避免构造函数歧义
+    this->size = Hyprutils::Math::Vector2D(
+        static_cast<int>(info.width),
+        static_cast<int>(info.height)
+    );
     this->opaque = true;
     m_format = info.format;
     m_modifier = info.modifier;
@@ -114,6 +118,8 @@ std::tuple<uint8_t*, uint32_t, size_t> CAnlandBuffer::beginDataPtr(uint32_t flag
         ANLAND_LOG("CAnlandBuffer: mmap success for slot %d, size=%zu", m_index, m_mappedSize);
     }
 
+    // 注意：这里缺少 m_mappedStride 的初始化，应该是 m_stride
+    // 但 beginDataPtr 返回的第二个参数是 stride，需要正确设置
     return {static_cast<uint8_t*>(m_mappedData), m_stride, m_mappedSize};
 }
 
