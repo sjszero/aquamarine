@@ -107,17 +107,22 @@ jobs:
           fetch-depth: 1
 
       # ==========================================================
-      # 7. 生成补丁哈希
+      # 7. 验证补丁文件存在
       # ==========================================================
-      - name: Generate patch hash
-        id: patch-hash
+      - name: Verify patch file
         run: |
-          if [ -f "${{ github.workspace }}/${{ env.HYPR_PATCH }}" ]; then
-            HASH=$(sha256sum "${{ github.workspace }}/${{ env.HYPR_PATCH }}" | cut -c1-16)
+          echo "Current directory: $(pwd)"
+          echo "Files in current directory:"
+          ls -la ./
+          if [ -f "./${{ env.HYPR_PATCH }}" ]; then
+            echo "✅ Patch file found: ./${{ env.HYPR_PATCH }}"
+            HASH=$(sha256sum "./${{ env.HYPR_PATCH }}" | cut -c1-16)
+            echo "hypr_patch_hash=${HASH}" >> $GITHUB_OUTPUT
           else
-            HASH="no-patch"
+            echo "⚠️ Patch file not found: ./${{ env.HYPR_PATCH }}"
+            echo "hypr_patch_hash=no-patch" >> $GITHUB_OUTPUT
           fi
-          echo "hypr_patch_hash=${HASH}" >> $GITHUB_OUTPUT
+        id: patch-hash
 
       # ==========================================================
       # 第一部分：构建 Aquamarine
@@ -146,15 +151,20 @@ jobs:
           SRCDIR=$(find . -maxdepth 1 -type d -name "${{ env.AQUA_SRC }}-*" | head -1)
           echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
 
-      # ---------- 10. 修改 Aquamarine changelog ----------
+      # ---------- 10. 修改 Aquamarine changelog（只在未缓存时执行） ----------
       - name: Bump Aquamarine changelog
         if: steps.aqua-src-cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.aqua-src-dir.outputs.srcdir }}
-          VER=$(dpkg-parsechangelog --show-field Version)
-          NEW_VER="${VER}+anland1"
-          dch --newversion "$NEW_VER" "Anland backend (CI build)"
-          echo "Aqua version: $NEW_VER"
+          # 检查是否已经添加过 +anland1 后缀
+          if ! grep -q "+anland1" debian/changelog; then
+            VER=$(dpkg-parsechangelog --show-field Version)
+            NEW_VER="${VER}+anland1"
+            dch --newversion "$NEW_VER" "Anland backend (CI build)"
+            echo "Aqua version: $NEW_VER"
+          else
+            echo "Aqua changelog already has +anland1 suffix, skipping"
+          fi
 
       # ---------- 11. 安装 Aquamarine build-dep ----------
       - name: Install Aquamarine build dependencies
@@ -206,7 +216,7 @@ jobs:
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
-          PATCH_FILE="${{ github.workspace }}/${{ env.HYPR_PATCH }}"
+          PATCH_FILE="./${{ env.HYPR_PATCH }}"
           if [ -f "$PATCH_FILE" ]; then
             echo "Applying ${{ env.HYPR_PATCH }} from $PATCH_FILE..."
             patch -p1 --forward --reject-file=- < "$PATCH_FILE" || {
@@ -214,19 +224,22 @@ jobs:
             }
           else
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
-            echo "Files in workspace:"
-            ls -la "${{ github.workspace }}/" || true
           fi
 
-      # ---------- 17. 修改 Hyprland changelog ----------
+      # ---------- 17. 修改 Hyprland changelog（只在未缓存时执行，避免重复后缀） ----------
       - name: Bump Hyprland changelog
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
-          VER=$(dpkg-parsechangelog --show-field Version)
-          NEW_VER="${VER}+anland1"
-          dch --newversion "$NEW_VER" "Add Anland backend support (CI build)"
-          echo "Hypr version: $NEW_VER"
+          # 检查是否已经添加过 +anland1 后缀
+          if ! grep -q "+anland1" debian/changelog; then
+            VER=$(dpkg-parsechangelog --show-field Version)
+            NEW_VER="${VER}+anland1"
+            dch --newversion "$NEW_VER" "Add Anland backend support (CI build)"
+            echo "Hypr version: $NEW_VER"
+          else
+            echo "Hypr changelog already has +anland1 suffix, skipping"
+          fi
 
       # ---------- 18. 安装 Hyprland build-dep ----------
       - name: Install Hyprland build dependencies
