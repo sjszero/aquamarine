@@ -1,20 +1,16 @@
-name: Build Hyprland (Anland) from Debian source
+name: Build Hyprland & Aquamarine (Anland) from Debian source
 
 on:
   workflow_dispatch:
     inputs:
       aquamarine_version:
-        description: 'Aquamarine Debian version (for build-dependency)'
+        description: 'Aquamarine Debian version (e.g. 0.11.0-2~bpo13+1)'
         required: true
         default: '0.11.0-2~bpo13+1'
       hyprland_version:
         description: 'Hyprland Debian version (e.g. 0.55.2+ds-1~bpo13+1)'
         required: true
         default: '0.55.2+ds-1~bpo13+1'
-      aquamarine_run_id:
-        description: 'Run ID of aquamarine-build (leave empty to use latest)'
-        required: false
-        default: ''
       clean_cache:
         description: 'Clean all caches and rebuild from scratch'
         required: false
@@ -23,18 +19,21 @@ on:
 
 env:
   DEBIAN_FRONTEND: noninteractive
+  AQUA_SRC: aquamarine
   HYPR_SRC: hyprland
   HYPR_PATCH: hyprland-anland.patch
 
 jobs:
-  build-hyprland:
+  build-all:
     runs-on: ubuntu-24.04-arm
     container:
       image: debian:trixie-slim
       options: --privileged --user root
 
     steps:
-      # ---------- 1. 设置源 ----------
+      # ==========================================================
+      # 1. 设置 Debian 源
+      # ==========================================================
       - name: Setup sources
         run: |
           cat > /etc/apt/sources.list << 'EOF'
@@ -49,7 +48,9 @@ jobs:
           EOF
           apt-get update
 
-      # ---------- 2. 生成 APT 哈希 ----------
+      # ==========================================================
+      # 2. 生成 APT 哈希
+      # ==========================================================
       - name: Generate APT package list hash
         id: apt-hash
         run: |
@@ -60,7 +61,9 @@ jobs:
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
           echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
 
-      # ---------- 3. APT 缓存 ----------
+      # ==========================================================
+      # 3. APT 缓存
+      # ==========================================================
       - name: Cache APT packages
         id: apt-cache
         uses: actions/cache@v4
@@ -68,25 +71,31 @@ jobs:
           path: |
             /var/cache/apt/archives/*.deb
             /var/lib/apt/lists
-          key: apt-hypr-${{ runner.arch }}-${{ steps.apt-hash.outputs.package_hash }}
+          key: apt-all-${{ runner.arch }}-${{ steps.apt-hash.outputs.package_hash }}
           restore-keys: |
-            apt-hypr-${{ runner.arch }}-
+            apt-all-${{ runner.arch }}-
 
-      # ---------- 4. 安装基础工具 ----------
+      # ==========================================================
+      # 4. 安装基础构建工具
+      # ==========================================================
       - name: Install base tools
         run: |
           apt-get install -y --no-install-recommends \
             devscripts build-essential fakeroot dpkg-dev quilt \
             cmake pkg-config git wget curl ca-certificates gnupg
 
-      # ---------- 5. 检出仓库（获取补丁文件） ----------
-      - name: Checkout repository for patches
+      # ==========================================================
+      # 5. 检出仓库（获取补丁）
+      # ==========================================================
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           path: repo
           fetch-depth: 1
 
-      # ---------- 6. 生成补丁哈希 ----------
+      # ==========================================================
+      # 6. 生成补丁哈希
+      # ==========================================================
       - name: Generate patch hash
         id: patch-hash
         run: |
@@ -97,7 +106,66 @@ jobs:
           fi
           echo "hypr_patch_hash=${HASH}" >> $GITHUB_OUTPUT
 
-      # ---------- 7. Hyprland 源码缓存 ----------
+      # ==========================================================
+      # 第一部分：构建 Aquamarine（Anland 版本，源码已包含）
+      # ==========================================================
+
+      # ---------- 7. Aquamarine 源码缓存 ----------
+      - name: Cache Aquamarine source
+        id: aqua-src-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.AQUA_SRC }}-*
+          key: src-aqua-${{ inputs.aquamarine_version }}
+          restore-keys: |
+            src-aqua-${{ inputs.aquamarine_version }}-
+            src-aqua-
+
+      # ---------- 8. 获取 Aquamarine 源码 ----------
+      - name: Fetch Aquamarine source
+        if: steps.aqua-src-cache.outputs.cache-hit != 'true'
+        run: |
+          apt-get source ${{ env.AQUA_SRC }}=${{ inputs.aquamarine_version }}
+
+      - name: Find Aqua source dir
+        id: aqua-src-dir
+        run: |
+          SRCDIR=$(find . -maxdepth 1 -type d -name "${{ env.AQUA_SRC }}-*" | head -1)
+          echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
+
+      # ---------- 9. 修改 Aquamarine changelog ----------
+      - name: Bump Aquamarine changelog
+        if: steps.aqua-src-cache.outputs.cache-hit != 'true'
+        run: |
+          cd ${{ steps.aqua-src-dir.outputs.srcdir }}
+          VER=$(dpkg-parsechangelog --show-field Version)
+          NEW_VER="${VER}+anland1"
+          dch --newversion "$NEW_VER" "Anland backend (CI build)"
+          echo "Aqua version: $NEW_VER"
+
+      # ---------- 10. 安装 Aquamarine build-dep ----------
+      - name: Install Aquamarine build dependencies
+        run: |
+          cd ${{ steps.aqua-src-dir.outputs.srcdir }}
+          apt-get build-dep -y ./ || apt-get build-dep -y ${{ env.AQUA_SRC }}
+
+      # ---------- 11. 构建 Aquamarine .deb ----------
+      - name: Build Aquamarine .deb
+        run: |
+          cd ${{ steps.aqua-src-dir.outputs.srcdir }}
+          dpkg-buildpackage -b -uc -us -d -j$(nproc)
+
+      # ---------- 12. 安装 Aquamarine .deb ----------
+      - name: Install Aquamarine .deb
+        run: |
+          dpkg -i ./${{ env.AQUA_SRC }}_*.deb || apt-get install -f -y
+          dpkg -i ./${{ env.AQUA_SRC }}_*.deb
+
+      # ==========================================================
+      # 第二部分：构建 Hyprland（打 Anland 补丁）
+      # ==========================================================
+
+      # ---------- 13. Hyprland 源码缓存 ----------
       - name: Cache Hyprland source
         id: hypr-src-cache
         uses: actions/cache@v4
@@ -108,7 +176,7 @@ jobs:
             src-hypr-${{ inputs.hyprland_version }}-
             src-hypr-
 
-      # ---------- 8. 获取 Hyprland 源码 ----------
+      # ---------- 14. 获取 Hyprland 源码 ----------
       - name: Fetch Hyprland source
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -120,7 +188,7 @@ jobs:
           SRCDIR=$(find . -maxdepth 1 -type d -name "${{ env.HYPR_SRC }}-*" | head -1)
           echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
 
-      # ---------- 9. 应用 Hyprland Anland 补丁 ----------
+      # ---------- 15. 应用 Hyprland Anland 补丁 ----------
       - name: Apply Anland patch to Hyprland
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -135,7 +203,7 @@ jobs:
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
 
-      # ---------- 10. 修改 Hyprland changelog ----------
+      # ---------- 16. 修改 Hyprland changelog ----------
       - name: Bump Hyprland changelog
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -145,47 +213,50 @@ jobs:
           dch --newversion "$NEW_VER" "Add Anland backend support (CI build)"
           echo "Hypr version: $NEW_VER"
 
-      # ---------- 11. 下载 Aquamarine .deb ----------
-      - name: Download Aquamarine deb
-        uses: dawidd6/action-download-artifact@v6
-        with:
-          workflow: build-aquamarine-anland.yml
-          workflow_conclusion: success
-          branch: ${{ github.ref_name }}
-          name: aquamarine-anland-debs
-          path: ./
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          run_id: ${{ inputs.aquamarine_run_id }}
-
-      # ---------- 12. 安装 Aquamarine .deb ----------
-      - name: Install Aquamarine .deb
-        run: |
-          dpkg -i ./aquamarine_*.deb || apt-get install -f -y
-          dpkg -i ./aquamarine_*.deb
-
-      # ---------- 13. 安装 Hyprland build-dep ----------
+      # ---------- 17. 安装 Hyprland build-dep ----------
       - name: Install Hyprland build dependencies
         run: |
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
           apt-get build-dep -y ./ || apt-get build-dep -y ${{ env.HYPR_SRC }}
 
-      # ---------- 14. 构建 Hyprland .deb ----------
+      # ---------- 18. 构建 Hyprland .deb ----------
       - name: Build Hyprland .deb
         run: |
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
-      # ---------- 15. 收集 Hyprland .deb ----------
-      - name: Collect artifacts
+      # ---------- 19. 收集所有 .deb ----------
+      - name: Collect all artifacts
         run: |
           mkdir -p artifacts
-          find . -maxdepth 1 -name "hyprland*.deb" -exec cp {} artifacts/ \;
+          find . -maxdepth 1 -name "*.deb" -exec cp {} artifacts/ \;
           ls -la artifacts/
 
-      # ---------- 16. 上传 Hyprland .deb ----------
-      - name: Upload Hyprland debs
+      # ---------- 20. 上传所有 .deb ----------
+      - name: Upload all debs
         uses: actions/upload-artifact@v4
         with:
-          name: hyprland-anland-debs
+          name: anland-debs
           path: artifacts/*.deb
           retention-days: 7
+
+      # ---------- 21. 构建摘要 ----------
+      - name: Summary
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Cache | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| APT | ${{ steps.apt-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Aquamarine Source | ${{ steps.aqua-src-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Hyprland Source | ${{ steps.hypr-src-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- Aquamarine: \`aquamarine_*+anland1_arm64.deb\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Hyprland: \`hyprland_*+anland1_arm64.deb\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Install" >> $GITHUB_STEP_SUMMARY
+          echo '```bash' >> $GITHUB_STEP_SUMMARY
+          echo "sudo dpkg -i aquamarine_*.deb hyprland_*.deb" >> $GITHUB_STEP_SUMMARY
+          echo "sudo apt-get install -f -y" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
