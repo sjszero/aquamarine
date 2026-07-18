@@ -64,7 +64,6 @@ jobs:
           deb-src http://deb.debian.org/debian sid main
           EOF
           rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
-          # 设置 APT 默认使用 trixie，但可以从 sid 安装特定包
           cat > /etc/apt/apt.conf.d/99backports << 'EOF'
           APT::Default-Release "trixie";
           EOF
@@ -78,35 +77,25 @@ jobs:
         shell: bash
         run: |
           cat > /tmp/apt-packages.txt << 'EOF'
-          # 基础构建工具
           devscripts build-essential fakeroot dpkg-dev quilt debhelper-compat
           cmake pkg-config git wget curl ca-certificates gnupg xxd
-          # OpenGL/EGL/GLES
           libgles-dev libegl-dev libgl-dev libgl1-mesa-dev libegl1-mesa-dev
           libgles2-mesa-dev mesa-common-dev
-          # Wayland 核心
           libwayland-dev wayland-protocols
-          # 输入/显示
           libseat-dev libinput-dev libudev-dev
-          # DRM/GBM
           libdrm-dev libgbm-dev
-          # X11 相关
           libxkbcommon-dev
           libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev
           libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev
           libxcb-errors-dev libxrender-dev libxcomposite-dev
           libxfixes-dev libxext-dev libxcursor-dev
-          # 图形/渲染
           libpixman-1-dev libcairo2-dev libpango1.0-dev libpangocairo-1.0-0
-          # Hyprland 生态库（backports 中可用）
           libhyprutils-dev libhyprlang-dev libhyprcursor-dev libhyprgraphics-dev
-          # 其他
           libpugixml-dev libtomlplusplus-dev
           uuid-dev libsystemd-dev
           libre2-dev libmuparser-dev liblcms2-dev
           liblua5.4-dev
           hwdata
-          # PipeWire
           libpipewire-0.3-dev libspa-0.2-dev
           EOF
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
@@ -164,7 +153,6 @@ jobs:
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "Some backports packages may already be installed"
           
-          # 诊断：找到 hyprutils.pc 的实际位置
           echo "=== Finding hyprutils.pc ==="
           find /usr -name "hyprutils.pc" 2>/dev/null || echo "hyprutils.pc not found"
           echo "=== Finding libdisplay-info.pc ==="
@@ -243,9 +231,9 @@ jobs:
           echo "🧹 Cleaning caches as requested..."
           rm -rf /tmp/aqua-install /tmp/hypr-install
           rm -rf aquamarine*/ hyprland*/
-          # 移除所有 Aquamarine 包
           dpkg -r libaquamarine10 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
+          dpkg -r libaquamarine-dev 2>/dev/null || true
           apt-get clean
           rm -rf /var/lib/apt/lists/*
           apt-get update
@@ -299,7 +287,6 @@ jobs:
           cd aquamarine
           mkdir -p build && cd build
           
-          # 动态查找 .pc 文件路径
           PC_PATHS=$(find /usr -name "*.pc" -exec dirname {} \; 2>/dev/null | sort -u | tr '\n' ':')
           export PKG_CONFIG_PATH="${PC_PATHS}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
           
@@ -358,10 +345,9 @@ jobs:
       - name: Install Aquamarine .deb
         if: inputs.skip_aquamarine != true
         run: |
-          # 先移除所有冲突的 Aquamarine 包
           dpkg -r libaquamarine10 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
-          # 确保运行时依赖已安装
+          dpkg -r libaquamarine-dev 2>/dev/null || true
           apt-get install -y -t sid --no-install-recommends libdisplay-info3 || \
             apt-get install -y --no-install-recommends libdisplay-info3 || true
           if [ -f /libaquamarine10_*.deb ]; then
@@ -442,11 +428,10 @@ jobs:
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
-          # 关键：先卸载 Aquamarine，让 build-dep 可以正常安装 sid 的版本
-          # 但为了避免冲突，我们直接告诉 apt 忽略 aquamarine 相关依赖
-          # 方法：先卸载我们自己安装的 Aquamarine
+          # 先卸载所有 Aquamarine 包
           dpkg -r libaquamarine10 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
+          dpkg -r libaquamarine-dev 2>/dev/null || true
           
           # 然后运行 build-dep
           apt-get build-dep -y ./ || {
@@ -460,6 +445,10 @@ jobs:
               || echo "Some packages may already be installed"
             apt-get build-dep -y ./
           }
+          
+          # 卸载 sid 安装的 Aquamarine（如果有）
+          dpkg -r libaquamarine11 2>/dev/null || true
+          dpkg -r libaquamarine-dev 2>/dev/null || true
           
           # 重新安装我们自己构建的 Aquamarine
           if [ -f /libaquamarine10_*.deb ]; then
@@ -484,7 +473,6 @@ jobs:
         run: |
           mkdir -p artifacts
 
-          # 复制 Aquamarine .deb
           if [ -f /libaquamarine10_*.deb ]; then
             cp /libaquamarine10_*.deb artifacts/
             echo "✅ Copied Aquamarine .deb"
@@ -492,7 +480,6 @@ jobs:
             echo "⚠️ No Aquamarine .deb found"
           fi
 
-          # 过滤 Hyprland 相关的 .deb（如果构建了）
           if [ "${{ inputs.skip_hyprland }}" != "true" ]; then
             find . -maxdepth 1 -name "*.deb" -type f | while read -r deb; do
               filename=$(basename "$deb")
