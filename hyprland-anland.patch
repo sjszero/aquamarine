@@ -126,7 +126,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +                // 延迟调度帧，确保 setupDefaultWS 先执行
 +                g_pEventLoopManager->doLater([self = m_self]() {
 +                    if (!self) return;
-+                    self->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEW_MONITOR);
++                    self->m_output->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEW_MONITOR);
 +                });
 +                Log::logger->log(Log::DEBUG,
 +                    "ANLAND: Virtual display set to %dx%d", (int)m_size.x, (int)m_size.y);
@@ -150,7 +150,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +            m_forceFullFrames = 3;
 +            g_pEventLoopManager->doLater([self = m_self]() {
 +                if (!self) return;
-+                self->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEW_MONITOR);
++                self->m_output->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEW_MONITOR);
 +            });
 +        }
 +        if (m_size.x == 0 || m_size.y == 0) {
@@ -586,14 +586,14 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
 +    // ---- Anland: 虚拟显示强制渲染 ----
 +    if (pMonitor->m_isVirtualDisplay && !pMonitor->m_output->needsFrame) {
 +        if (pMonitor->m_forceFullFrames == 0) {
-+            pMonitor->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
++            pMonitor->m_output->scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_RENDER_MONITOR);
 +        }
 +    }
 +
      const auto NOW = Time::steadyNow();
  
      // check the damage
-diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
+diff --git a/src/render/Renderer.hpp b/src/render/Renderer.hpp
 --- a/src/render/Renderer.hpp
 +++ b/src/render/Renderer.hpp
 @@ -4,6 +4,7 @@
