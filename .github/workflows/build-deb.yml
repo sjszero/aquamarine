@@ -48,7 +48,7 @@ jobs:
 
     steps:
       # ==========================================================
-      # 1. 设置 Debian 源（包含 sid）
+      # 1. 设置 Debian 源
       # ==========================================================
       - name: Setup sources
         run: |
@@ -57,15 +57,12 @@ jobs:
           deb http://deb.debian.org/debian trixie-updates main
           deb http://deb.debian.org/debian-security trixie-security main
           deb http://deb.debian.org/debian trixie-backports main
-          deb http://deb.debian.org/debian sid main
           deb-src http://deb.debian.org/debian trixie main
           deb-src http://deb.debian.org/debian trixie-updates main
           deb-src http://deb.debian.org/debian-security trixie-security main
           deb-src http://deb.debian.org/debian trixie-backports main
-          deb-src http://deb.debian.org/debian sid main
           EOF
           rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
-          # 设置 APT 默认使用 trixie，但可以从 sid 安装特定包
           cat > /etc/apt/apt.conf.d/99backports << 'EOF'
           APT::Default-Release "trixie";
           EOF
@@ -130,7 +127,7 @@ jobs:
             apt-all-${{ runner.arch }}-
 
       # ==========================================================
-      # 4. 安装所有依赖
+      # 4. 安装所有依赖（不使用 sid）
       # ==========================================================
       - name: Install all dependencies
         run: |
@@ -161,6 +158,7 @@ jobs:
         run: |
           apt-get install -y -t trixie-backports --no-install-recommends \
             libxkbcommon-dev wayland-protocols \
+            libdisplay-info-dev libdisplay-info3 \
             libinput-dev \
             libhyprutils-dev libhyprlang-dev \
             libhyprcursor-dev libhyprgraphics-dev \
@@ -168,22 +166,7 @@ jobs:
             || echo "Some backports packages may already be installed"
 
       # ==========================================================
-      # 6. 从 sid 安装较新版本的 libdisplay-info
-      # ==========================================================
-      - name: Install libdisplay-info from sid
-        run: |
-          # libdisplay-info 在 trixie 中版本太旧 (0.2.0)，需要 >= 0.3.0
-          # 从 sid 安装
-          apt-get install -y -t sid --no-install-recommends \
-            libdisplay-info-dev libdisplay-info3 \
-            || echo "Failed to install libdisplay-info from sid"
-          
-          # 验证安装
-          pkg-config --modversion libdisplay-info || echo "libdisplay-info not found"
-          ls -la /usr/lib/aarch64-linux-gnu/pkgconfig/libdisplay-info* 2>/dev/null || echo "No pc file"
-
-      # ==========================================================
-      # 7. 构建 hyprwayland-scanner（Aquamarine 依赖）
+      # 6. 构建 hyprwayland-scanner（Aquamarine 依赖）
       # ==========================================================
       - name: Cache hyprwayland-scanner
         id: scanner-cache
@@ -211,7 +194,7 @@ jobs:
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
 
       # ==========================================================
-      # 8. 检出仓库（获取补丁）
+      # 7. 检出仓库（获取补丁）
       # ==========================================================
       - name: Checkout repository (for hyprland patch)
         uses: actions/checkout@v4
@@ -219,7 +202,7 @@ jobs:
           fetch-depth: 1
 
       # ==========================================================
-      # 9. 验证补丁文件
+      # 8. 验证补丁文件
       # ==========================================================
       - name: Verify patch file
         id: patch-hash
@@ -235,7 +218,7 @@ jobs:
           fi
 
       # ==========================================================
-      # 10. 清理缓存（如果请求）
+      # 9. 清理缓存（如果请求）
       # ==========================================================
       - name: Clean caches if requested
         if: inputs.clean_cache == true
@@ -255,7 +238,7 @@ jobs:
         if: inputs.skip_aquamarine != true
         run: echo "Starting Aquamarine build..."
 
-      # ---------- 11. 克隆 Aquamarine ----------
+      # ---------- 10. 克隆 Aquamarine ----------
       - name: Clone Aquamarine (Anland) from GitHub
         if: inputs.skip_aquamarine != true
         uses: actions/checkout@v4
@@ -265,7 +248,7 @@ jobs:
           path: aquamarine
           fetch-depth: 1
 
-      # ---------- 12. 获取 Aquamarine commit ----------
+      # ---------- 11. 获取 Aquamarine commit ----------
       - name: Get Aquamarine commit
         id: aqua-commit
         if: inputs.skip_aquamarine != true
@@ -275,7 +258,7 @@ jobs:
           COMMIT=$(git rev-parse HEAD)
           echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
 
-      # ---------- 13. Aquamarine 构建缓存 ----------
+      # ---------- 12. Aquamarine 构建缓存 ----------
       - name: Cache Aquamarine build
         id: aqua-build-cache
         if: inputs.skip_aquamarine != true
@@ -289,7 +272,7 @@ jobs:
             aqua-build-${{ steps.aqua-commit.outputs.commit }}-
             aqua-build-
 
-      # ---------- 14. 构建 Aquamarine ----------
+      # ---------- 13. 构建 Aquamarine ----------
       - name: Build Aquamarine (Anland)
         if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
         run: |
@@ -307,7 +290,7 @@ jobs:
           make -j$(nproc)
           make install DESTDIR=/tmp/aqua-install
 
-      # ---------- 15. 打包 Aquamarine .deb ----------
+      # ---------- 14. 打包 Aquamarine .deb ----------
       - name: Package Aquamarine .deb
         if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
         run: |
@@ -339,13 +322,12 @@ jobs:
           cd /
           dpkg-deb --build /tmp/aqua-install /libaquamarine10_0.11.0-anland1_arm64.deb
 
-      # ---------- 16. 安装 Aquamarine .deb ----------
+      # ---------- 15. 安装 Aquamarine .deb ----------
       - name: Install Aquamarine .deb
         if: inputs.skip_aquamarine != true
         run: |
-          # 先确保运行时依赖已安装（从 sid）
-          apt-get install -y -t sid --no-install-recommends libdisplay-info3 || \
-            apt-get install -y --no-install-recommends libdisplay-info3 || true
+          # 先确保运行时依赖已安装
+          apt-get install -y --no-install-recommends libdisplay-info3 || true
           if [ -f /libaquamarine10_*.deb ]; then
             dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine10_*.deb
@@ -372,7 +354,7 @@ jobs:
         if: inputs.skip_hyprland != true
         run: echo "Starting Hyprland build..."
 
-      # ---------- 17. Hyprland 源码缓存 ----------
+      # ---------- 16. Hyprland 源码缓存 ----------
       - name: Cache Hyprland source
         id: hypr-src-cache
         if: inputs.skip_hyprland != true
@@ -384,13 +366,13 @@ jobs:
             src-hypr-${{ inputs.hyprland_version }}-
             src-hypr-
 
-      # ---------- 18. 获取 Hyprland Debian 源码 ----------
+      # ---------- 17. 获取 Hyprland Debian 源码 ----------
       - name: Fetch Hyprland source
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
           apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
 
-      # ---------- 19. 应用 Hyprland Anland 补丁 ----------
+      # ---------- 18. 应用 Hyprland Anland 补丁 ----------
       - name: Apply Anland patch to Hyprland
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -405,7 +387,7 @@ jobs:
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
 
-      # ---------- 20. 修改 Hyprland changelog ----------
+      # ---------- 19. 修改 Hyprland changelog ----------
       - name: Bump Hyprland changelog
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -419,15 +401,19 @@ jobs:
             echo "Hypr changelog already has +anland1 suffix, skipping"
           fi
 
-      # ---------- 21. 安装 Hyprland build-dep ----------
+      # ---------- 20. 安装 Hyprland build-dep ----------
       - name: Install Hyprland build dependencies
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
+          # 先移除可能冲突的 sid 包（如果存在）
+          apt-get remove -y libaquamarine-dev libaquamarine11 2>/dev/null || true
+          # 正常安装 build-dep
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
               libxkbcommon-dev wayland-protocols \
+              libdisplay-info-dev libdisplay-info3 \
               libinput-dev \
               libhyprutils-dev libhyprlang-dev \
               libhyprcursor-dev libhyprgraphics-dev \
@@ -436,7 +422,7 @@ jobs:
             apt-get build-dep -y ./
           }
 
-      # ---------- 22. 构建 Hyprland .deb ----------
+      # ---------- 21. 构建 Hyprland .deb ----------
       - name: Build Hyprland .deb
         if: inputs.skip_hyprland != true
         run: |
@@ -444,7 +430,7 @@ jobs:
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
       # ==========================================================
-      # 23. 收集 artifacts
+      # 22. 收集 artifacts
       # ==========================================================
       - name: Collect artifacts
         shell: bash
@@ -480,7 +466,7 @@ jobs:
           ls -la artifacts/
 
       # ==========================================================
-      # 24. 上传 artifacts
+      # 23. 上传 artifacts
       # ==========================================================
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -490,7 +476,7 @@ jobs:
           retention-days: 7
 
       # ==========================================================
-      # 25. 构建摘要
+      # 24. 构建摘要
       # ==========================================================
       - name: Summary
         run: |
