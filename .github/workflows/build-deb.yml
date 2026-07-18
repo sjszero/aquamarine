@@ -346,18 +346,15 @@ jobs:
         run: |
           apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
 
+      # ---------- 关键修复：git apply 总是执行 ----------
       - name: Apply Anland patch to Hyprland
-        if: inputs.skip_hyprland != true   # 不再依赖缓存命中条件
+        if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
           PATCH_FILE="../${{ env.HYPR_PATCH }}"
           if [ -f "$PATCH_FILE" ]; then
-            if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
-              echo "Patch not applied, applying..."
-              patch -p1 --forward --reject-file=- < "$PATCH_FILE"
-            else
-              echo "Patch already applied, skipping."
-            fi
+            echo "Applying ${{ env.HYPR_PATCH }} with git apply..."
+            git apply --verbose "$PATCH_FILE" || true
           else
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
@@ -375,8 +372,7 @@ jobs:
             echo "Hypr changelog already has +anland1 suffix, skipping"
           fi
 
-      # ---------- 关键步骤：创建 shlibs.local ----------
-      - name: Create shlibs.local to resolve libaquamarine dependency
+      - name: Create shlibs.local
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
@@ -426,7 +422,6 @@ jobs:
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
           ldconfig
-          # -d 跳过依赖检查，但 shlibs.local 会让 dpkg-shlibdeps 正确识别
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
       # ==========================================================
