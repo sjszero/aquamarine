@@ -75,14 +75,35 @@ jobs:
         shell: bash
         run: |
           cat > /tmp/apt-packages.txt << 'EOF'
+          # 基础构建工具
           devscripts build-essential fakeroot dpkg-dev quilt debhelper-compat
-          cmake pkg-config git wget curl ca-certificates gnupg
-          libxkbcommon-dev wayland-protocols
+          cmake pkg-config git wget curl ca-certificates gnupg xxd
+          # OpenGL/EGL/GLES
           libgles-dev libegl-dev libgl-dev libgl1-mesa-dev libegl1-mesa-dev
           libgles2-mesa-dev mesa-common-dev
-          libseat-dev libinput-dev libwayland-dev libpixman-1-dev
-          libdrm-dev libgbm-dev libudev-dev libdisplay-info-dev
+          # Wayland 核心
+          libwayland-dev wayland-protocols
+          # 输入/显示
+          libseat-dev libinput-dev libudev-dev
+          libdisplay-info-dev
+          # DRM/GBM
+          libdrm-dev libgbm-dev
+          # X11 相关 (Hyprland 需要)
+          libxkbcommon-dev
+          libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev
+          libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev
+          libxcb-errors-dev libxrender-dev libxcomposite-dev
+          libxfixes-dev libxext-dev libxcursor-dev
+          # 图形/渲染
+          libpixman-1-dev libcairo2-dev libpango1.0-dev libpangocairo-1.0-0
+          # Hyprland 依赖库
+          hyprutils-dev hyprlang-dev hyprcursor-dev hyprgraphics-dev
+          # 其他
           libpugixml-dev libtomlplusplus-dev
+          libuuid-dev libsystemd-dev
+          libre2-dev libmuparser-dev liblcms2-dev
+          liblua5.4-dev
+          hwdata
           EOF
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
           echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
@@ -102,23 +123,31 @@ jobs:
             apt-all-${{ runner.arch }}-
 
       # ==========================================================
-      # 4. 安装基础构建工具和依赖
+      # 4. 安装所有依赖
       # ==========================================================
-      - name: Install base tools and dependencies
+      - name: Install all dependencies
         run: |
           apt-get install -y --no-install-recommends \
             devscripts build-essential fakeroot dpkg-dev quilt \
-            cmake pkg-config git wget curl ca-certificates gnupg \
+            cmake pkg-config git wget curl ca-certificates gnupg xxd \
             libgles-dev libegl-dev libgl-dev libgl1-mesa-dev \
             libegl1-mesa-dev libgles2-mesa-dev mesa-common-dev \
-            libseat-dev libinput-dev libwayland-dev libpixman-1-dev \
-            libdrm-dev libgbm-dev libudev-dev libdisplay-info-dev \
-            libxkbcommon-dev wayland-protocols \
+            libwayland-dev wayland-protocols \
+            libseat-dev libinput-dev libudev-dev \
+            libdisplay-info-dev \
+            libdrm-dev libgbm-dev \
+            libxkbcommon-dev \
             libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev \
             libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev \
             libxcb-errors-dev libxrender-dev libxcomposite-dev \
-            libxfixes-dev libxext-dev \
-            libpugixml-dev libtomlplusplus-dev
+            libxfixes-dev libxext-dev libxcursor-dev \
+            libpixman-1-dev libcairo2-dev libpango1.0-dev libpangocairo-1.0-0 \
+            hyprutils-dev hyprlang-dev hyprcursor-dev hyprgraphics-dev \
+            libpugixml-dev libtomlplusplus-dev \
+            libuuid-dev libsystemd-dev \
+            libre2-dev libmuparser-dev liblcms2-dev \
+            liblua5.4-dev \
+            hwdata
 
       # ==========================================================
       # 5. 从 backports 安装较新的依赖
@@ -127,7 +156,8 @@ jobs:
         run: |
           apt-get install -y -t trixie-backports --no-install-recommends \
             libxkbcommon-dev wayland-protocols libdisplay-info-dev \
-            libinput-dev \
+            libinput-dev hyprutils-dev hyprlang-dev \
+            hyprcursor-dev hyprgraphics-dev \
             || echo "Some backports packages may already be installed"
 
       # ==========================================================
@@ -155,10 +185,9 @@ jobs:
 
       - name: Verify hyprwayland-scanner
         run: |
-          which hyprwayland-scanner || echo "hyprwayland-scanner not in PATH"
-          hyprwayland-scanner --version 2>/dev/null || true
           export PATH=/usr/local/bin:$PATH
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
+          hyprwayland-scanner --version 2>/dev/null || true
 
       # ==========================================================
       # 7. 检出仓库（获取补丁）
@@ -248,7 +277,8 @@ jobs:
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
-            -DCMAKE_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/usr/lib" \
+            -DCMAKE_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/local/lib" \
+            -DCMAKE_INCLUDE_PATH="/usr/include:/usr/local/include" \
             -DCMAKE_PREFIX_PATH="/usr/local:/usr" \
             -DENABLE_ANLAND=ON \
             -DANLAND_SOCKET="/run/display.sock"
@@ -373,8 +403,8 @@ jobs:
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
               libxkbcommon-dev wayland-protocols libdisplay-info-dev \
-              libinput-dev hyprwayland-scanner hyprutils-dev \
-              hyprlang-dev hyprcursor-dev hyprgraphics-dev \
+              libinput-dev hyprutils-dev hyprlang-dev \
+              hyprcursor-dev hyprgraphics-dev \
               || echo "Some packages may already be installed"
             apt-get build-dep -y ./
           }
