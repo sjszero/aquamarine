@@ -298,17 +298,15 @@ jobs:
             aqua-build-${{ steps.aqua-commit.outputs.commit }}-
             aqua-build-
 
-      # ---------- 14. 构建 Aquamarine（关键：通过 -DCMAKE_PREFIX_PATH 传递 pkg-config 路径）----------
+      # ---------- 14. 构建 Aquamarine ----------
       - name: Build Aquamarine (Anland)
         if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
         run: |
           cd aquamarine
           mkdir -p build && cd build
-          # 通过 CMAKE_PREFIX_PATH 让 CMake 自动找到 pkg-config 路径
-          # 同时通过 PKG_CONFIG_PATH 环境变量（在同一个 shell 中导出）
-          export PKG_CONFIG_PATH="${{ steps.setup-pkgconfig.outputs.pc_dir }}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
-          echo "=== Using PKG_CONFIG_PATH: $PKG_CONFIG_PATH ==="
-          echo "=== Testing pkg-config ==="
+          # 关键：在同一个 shell 中设置 PKG_CONFIG_PATH
+          export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
+          # 测试是否能找到
           pkg-config --modversion hyprutils || echo "hyprutils not found"
           pkg-config --modversion libdisplay-info || echo "libdisplay-info not found"
           cmake .. -DCMAKE_BUILD_TYPE=Release \
@@ -316,7 +314,7 @@ jobs:
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
             -DCMAKE_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/local/lib" \
             -DCMAKE_INCLUDE_PATH="/usr/include:/usr/local/include" \
-            -DCMAKE_PREFIX_PATH="/usr/local:/usr:${{ steps.setup-pkgconfig.outputs.pc_dir }}" \
+            -DCMAKE_PREFIX_PATH="/usr/local:/usr:/usr/lib/aarch64-linux-gnu/pkgconfig" \
             -DENABLE_ANLAND=ON \
             -DANLAND_SOCKET="/run/display.sock"
           make -j$(nproc)
