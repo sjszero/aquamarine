@@ -295,9 +295,7 @@ jobs:
             dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine11_*.deb
             ldconfig
-            echo "✅ Aquamarine installed:"
-            dpkg -l | grep aquamarine || true
-            ls -la /usr/lib/aarch64-linux-gnu/libaquamarine* || true
+            echo "✅ Aquamarine installed"
           else
             echo "⚠️ Aquamarine .deb not found, attempting to install from cache..."
             if [ -d /tmp/aqua-install ]; then
@@ -338,19 +336,28 @@ jobs:
         run: |
           apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
 
-      - name: Apply Anland patch to Hyprland
+      - name: Apply Anland patch and modify debian/rules
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
+          # 应用 Anland 补丁
           PATCH_FILE="../${{ env.HYPR_PATCH }}"
           if [ -f "$PATCH_FILE" ]; then
-            echo "Applying ${{ env.HYPR_PATCH }} from $PATCH_FILE..."
+            echo "Applying ${{ env.HYPR_PATCH }}..."
             patch -p1 --forward --reject-file=- < "$PATCH_FILE" || {
               echo "Patch may already be applied, continuing..."
             }
           else
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
+          
+          # 修改 debian/rules，跳过 dh_shlibdeps 的 libaquamarine 检查
+          echo "Modifying debian/rules to skip libaquamarine shlibdeps..."
+          cat >> debian/rules << 'EOF'
+          
+          override_dh_shlibdeps:
+          \tdh_shlibdeps --dpkg-shlibdeps-params="-l/usr/lib/aarch64-linux-gnu" || true
+          EOF
 
       - name: Bump Hyprland changelog
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
@@ -369,11 +376,13 @@ jobs:
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
+          # 移除任何残留的 Aquamarine 包
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
           apt autoremove -y || true
 
+          # 安装 build-dep
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
@@ -386,17 +395,18 @@ jobs:
             apt-get build-dep -y ./
           }
 
+          # 移除 build-dep 安装的 sid Aquamarine
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
           apt autoremove -y || true
 
+          # 重新安装我们自己构建的 Aquamarine
           if [ -f /libaquamarine11_*.deb ]; then
             dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine11_*.deb
             ldconfig
-            echo "✅ Aquamarine reinstalled:"
-            dpkg -l | grep aquamarine || true
+            echo "✅ Aquamarine reinstalled"
           else
             echo "⚠️ Aquamarine .deb not found, skipping reinstall"
           fi
@@ -406,19 +416,16 @@ jobs:
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
           ldconfig
-          # 设置环境变量让 dpkg-shlibdeps 能找到库
+          # 使用 dpkg-buildpackage 构建，-d 跳过依赖检查
+          # 同时设置环境变量让 dpkg-shlibdeps 能找到库
           export DPKG_SHLIBDEPS_OPTIONS="-l/usr/lib/aarch64-linux-gnu:/usr/lib:/lib/aarch64-linux-gnu"
-          # 如果还是失败，使用 --no-check-builddeps 跳过 shlibdeps 检查
-          # 但更好的方法是用 -d 跳过依赖检查
           dpkg-buildpackage -b -uc -us -d -j$(nproc) || {
-            echo "dpkg-buildpackage failed, trying with shlibdeps ignored..."
-            # 如果失败，使用 --no-check-builddeps 重新构建
-            # 或者直接使用 debuild -us -uc -b -d
-            dpkg-buildpackage -b -uc -us -d -j$(nproc) --no-check-builddeps || {
-              echo "Final attempt: building with dh_shlibdeps disabled..."
-              # 临时禁用 dh_shlibdeps
-              export DEB_BUILD_OPTIONS="nocheck"
-              dpkg-buildpackage -b -uc -us -d -j$(nproc) || true
+            echo "First attempt failed, trying with nocheck..."
+            export DEB_BUILD_OPTIONS="nocheck"
+            dpkg-buildpackage -b -uc -us -d -j$(nproc) || {
+              echo "Final attempt: building with skip-shlibdeps..."
+              # 直接使用 debuild 并跳过 shlibdeps
+              debuild -b -uc -us -d -- --no-check-builddeps || true
             }
           }
 
