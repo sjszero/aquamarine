@@ -19,11 +19,10 @@ on:
 
 env:
   DEBIAN_FRONTEND: noninteractive
-  PATCH_DIR: ${{ github.workspace }}/patches
-  AQUA_PATCH: aquamarine-anland.patch
-  HYPR_PATCH: hyprland-anland.patch
   AQUA_SRC: aquamarine
   HYPR_SRC: hyprland
+  AQUA_PATCH: aquamarine-anland.patch
+  HYPR_PATCH: hyprland-anland.patch
 
 jobs:
   build-hyprland:
@@ -85,18 +84,22 @@ jobs:
           path: repo
           fetch-depth: 1
 
-      # ---------- 6. 生成补丁哈希 ----------
+      # ---------- 6. 生成补丁哈希（明确输出两个独立的变量） ----------
       - name: Generate patch hashes
         id: patch-hash
         run: |
-          for p in ${{ env.AQUA_PATCH }} ${{ env.HYPR_PATCH }}; do
-            if [ -f "repo/patches/$p" ]; then
-              HASH=$(sha256sum "repo/patches/$p" | cut -c1-16)
-            else
-              HASH="no-patch"
-            fi
-            echo "${p}_hash=${HASH}" >> $GITHUB_OUTPUT
-          done
+          if [ -f "repo/patches/${{ env.AQUA_PATCH }}" ]; then
+            AQUA_HASH=$(sha256sum "repo/patches/${{ env.AQUA_PATCH }}" | cut -c1-16)
+          else
+            AQUA_HASH="no-patch"
+          fi
+          if [ -f "repo/patches/${{ env.HYPR_PATCH }}" ]; then
+            HYPR_HASH=$(sha256sum "repo/patches/${{ env.HYPR_PATCH }}" | cut -c1-16)
+          else
+            HYPR_HASH="no-patch"
+          fi
+          echo "aqua_patch_hash=${AQUA_HASH}" >> $GITHUB_OUTPUT
+          echo "hypr_patch_hash=${HYPR_HASH}" >> $GITHUB_OUTPUT
 
       # ==========================================================
       # 第一部分：构建并安装 Aquamarine（Anland）
@@ -108,7 +111,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.AQUA_SRC }}-*
-          key: src-aqua-${{ inputs.aquamarine_version }}-${{ steps.patch-hash.outputs.${{ env.AQUA_PATCH }}_hash }}
+          key: src-aqua-${{ inputs.aquamarine_version }}-${{ steps.patch-hash.outputs.aqua_patch_hash }}
           restore-keys: |
             src-aqua-${{ inputs.aquamarine_version }}-
 
@@ -173,7 +176,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.HYPR_SRC }}-*
-          key: src-hypr-${{ inputs.hyprland_version }}-${{ steps.patch-hash.outputs.${{ env.HYPR_PATCH }}_hash }}
+          key: src-hypr-${{ inputs.hyprland_version }}-${{ steps.patch-hash.outputs.hypr_patch_hash }}
           restore-keys: |
             src-hypr-${{ inputs.hyprland_version }}-
 

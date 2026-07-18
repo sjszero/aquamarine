@@ -15,9 +15,8 @@ on:
 
 env:
   DEBIAN_FRONTEND: noninteractive
-  PATCH_DIR: ${{ github.workspace }}/patches
-  AQUA_PATCH: aquamarine-anland.patch
   SOURCE_PKG: aquamarine
+  PATCH_FILE: aquamarine-anland.patch
 
 jobs:
   build-aquamarine:
@@ -49,7 +48,6 @@ jobs:
           cat > /tmp/apt-packages.txt << 'EOF'
           devscripts build-essential fakeroot dpkg-dev quilt debhelper-compat
           cmake pkg-config git wget curl ca-certificates gnupg
-          # build-dep 会自动拉取，但为了缓存 key 我们包含核心工具
           EOF
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
           echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
@@ -84,8 +82,8 @@ jobs:
       - name: Generate patch hash
         id: patch-hash
         run: |
-          if [ -f "repo/patches/${{ env.AQUA_PATCH }}" ]; then
-            HASH=$(sha256sum "repo/patches/${{ env.AQUA_PATCH }}" | cut -c1-16)
+          if [ -f "repo/patches/${{ env.PATCH_FILE }}" ]; then
+            HASH=$(sha256sum "repo/patches/${{ env.PATCH_FILE }}" | cut -c1-16)
           else
             HASH="no-patch"
           fi
@@ -118,9 +116,9 @@ jobs:
         if: steps.src-cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.find-src.outputs.srcdir }}
-          PATCH_FILE="${{ github.workspace }}/repo/patches/${{ env.AQUA_PATCH }}"
+          PATCH_FILE="${{ github.workspace }}/repo/patches/${{ env.PATCH_FILE }}"
           if [ -f "$PATCH_FILE" ]; then
-            echo "Applying ${{ env.AQUA_PATCH }}..."
+            echo "Applying ${{ env.PATCH_FILE }}..."
             patch -p1 --forward --reject-file=- < "$PATCH_FILE" || {
               echo "Patch may already be applied, continuing..."
             }
@@ -133,7 +131,6 @@ jobs:
         if: steps.src-cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.find-src.outputs.srcdir }}
-          # 获取当前版本并添加后缀
           VER=$(dpkg-parsechangelog --show-field Version)
           NEW_VER="${VER}+anland1"
           dch --newversion "$NEW_VER" "Add Anland backend support (CI build)"
