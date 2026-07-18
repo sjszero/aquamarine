@@ -37,7 +37,6 @@ env:
   DEBIAN_FRONTEND: noninteractive
   HYPR_SRC: hyprland
   HYPR_PATCH: hyprland-anland.patch
-  PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig
 
 jobs:
   build:
@@ -166,24 +165,30 @@ jobs:
             || echo "Some backports packages may already be installed"
 
       # ==========================================================
-      # 6. 诊断 pkg-config 路径
+      # 6. 诊断并设置 pkg-config 路径（关键步骤）
       # ==========================================================
-      - name: Diagnose pkg-config
+      - name: Setup pkg-config for backports
+        id: setup-pkgconfig
+        shell: bash
         run: |
-          echo "=== Checking pkg-config files ==="
-          echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-          echo ""
-          echo "=== Finding hyprutils .pc files ==="
-          find /usr -name "hyprutils*.pc" 2>/dev/null || echo "No hyprutils pc files found"
-          echo ""
-          echo "=== Finding libdisplay-info .pc files ==="
-          find /usr -name "*display-info*.pc" 2>/dev/null || echo "No display-info pc files found"
-          echo ""
-          echo "=== Finding all .pc files in pkgconfig directories ==="
-          find /usr -name "*.pc" 2>/dev/null | head -20 || echo "No pc files found"
-          echo ""
-          echo "=== pkg-config search path ==="
-          pkg-config --variable pc_path pkg-config || echo "pkg-config not available"
+          # 找到 hyprutils.pc 文件的位置
+          HYPRUTILS_PC=$(find /usr -name "hyprutils.pc" 2>/dev/null | head -1)
+          DISPLAY_INFO_PC=$(find /usr -name "libdisplay-info.pc" 2>/dev/null | head -1)
+          
+          echo "=== Found .pc files ==="
+          echo "hyprutils.pc: ${HYPRUTILS_PC}"
+          echo "libdisplay-info.pc: ${DISPLAY_INFO_PC}"
+          
+          # 提取目录
+          if [ -n "$HYPRUTILS_PC" ]; then
+            PC_DIR=$(dirname "$HYPRUTILS_PC")
+            echo "pc_dir=${PC_DIR}" >> $GITHUB_OUTPUT
+            echo "✅ hyprutils.pc found in: ${PC_DIR}"
+          else
+            # 如果没找到，使用默认路径
+            echo "pc_dir=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_OUTPUT
+            echo "⚠️ Using default pkgconfig path"
+          fi
 
       # ==========================================================
       # 7. 构建 hyprwayland-scanner（Aquamarine 依赖）
@@ -293,27 +298,25 @@ jobs:
             aqua-build-${{ steps.aqua-commit.outputs.commit }}-
             aqua-build-
 
-      # ---------- 14. 构建 Aquamarine ----------
+      # ---------- 14. 构建 Aquamarine（关键：通过 -DCMAKE_PREFIX_PATH 传递 pkg-config 路径）----------
       - name: Build Aquamarine (Anland)
         if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
         run: |
           cd aquamarine
           mkdir -p build && cd build
-          # 添加更多可能的 pkg-config 路径
-          export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
-          # 打印调试信息
-          echo "=== pkg-config search paths ==="
-          pkg-config --variable pc_path pkg-config
-          echo "=== Finding hyprutils via pkg-config ==="
-          pkg-config --modversion hyprutils || echo "hyprutils not found by pkg-config"
-          echo "=== Finding libdisplay-info via pkg-config ==="
-          pkg-config --modversion libdisplay-info || echo "libdisplay-info not found by pkg-config"
+          # 通过 CMAKE_PREFIX_PATH 让 CMake 自动找到 pkg-config 路径
+          # 同时通过 PKG_CONFIG_PATH 环境变量（在同一个 shell 中导出）
+          export PKG_CONFIG_PATH="${{ steps.setup-pkgconfig.outputs.pc_dir }}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
+          echo "=== Using PKG_CONFIG_PATH: $PKG_CONFIG_PATH ==="
+          echo "=== Testing pkg-config ==="
+          pkg-config --modversion hyprutils || echo "hyprutils not found"
+          pkg-config --modversion libdisplay-info || echo "libdisplay-info not found"
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
             -DCMAKE_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/local/lib" \
             -DCMAKE_INCLUDE_PATH="/usr/include:/usr/local/include" \
-            -DCMAKE_PREFIX_PATH="/usr/local:/usr" \
+            -DCMAKE_PREFIX_PATH="/usr/local:/usr:${{ steps.setup-pkgconfig.outputs.pc_dir }}" \
             -DENABLE_ANLAND=ON \
             -DANLAND_SOCKET="/run/display.sock"
           make -j$(nproc)
