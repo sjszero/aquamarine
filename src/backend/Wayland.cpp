@@ -61,28 +61,8 @@ wl_shm_format shmFormatFromDRM(uint32_t drmFormat) {
 }
 
 Aquamarine::CWaylandBackend::~CWaylandBackend() {
-    outputs.clear();
-    keyboards.clear();
-    pointers.clear();
-    idleCallbacks.clear();
-
-    waylandState.dmabufFeedback.reset();
-    waylandState.dmabuf.reset();
-    waylandState.shm.reset();
-    waylandState.compositor.reset();
-    waylandState.xdg.reset();
-    waylandState.seat.reset();
-    waylandState.registry.reset();
-
-    if (waylandState.display) {
-        wl_display_disconnect(waylandState.display);
-        waylandState.display = nullptr;
-    }
-
-    if (drmState.fd >= 0) {
+    if (drmState.fd >= 0)
         close(drmState.fd);
-        drmState.fd = -1;
-    }
 }
 
 eBackendType Aquamarine::CWaylandBackend::type() {
@@ -165,19 +145,7 @@ int Aquamarine::CWaylandBackend::drmRenderNodeFD() {
 }
 
 bool Aquamarine::CWaylandBackend::createOutput(const std::string& szName) {
-    std::string name = szName;
-    if (name.empty()) {
-        // skip past any auto-name slots already claimed by an explicit createOutput,
-        // so we never hand out a duplicate WAYLAND-N (see #185).
-        do {
-            name = std::format("WAYLAND-{}", ++lastOutputID);
-        } while (std::ranges::any_of(outputs, [&name](const auto& o) { return o->name == name; }));
-    } else if (std::ranges::any_of(outputs, [&name](const auto& o) { return o->name == name; })) {
-        backend->log(AQ_LOG_ERROR, std::format("Wayland: refusing to create output {}, name already in use", name));
-        return false;
-    }
-
-    auto o  = outputs.emplace_back(SP<CWaylandOutput>(new CWaylandOutput(name, self)));
+    auto o  = outputs.emplace_back(SP<CWaylandOutput>(new CWaylandOutput(szName.empty() ? std::format("WAYLAND-{}", ++lastOutputID) : szName, self)));
     o->self = o;
     if (backend->ready)
         o->swapchain = CSwapchain::create(backend->primaryAllocator, self.lock());
@@ -492,21 +460,6 @@ Hyprutils::Memory::CWeakPointer<IBackendImplementation> Aquamarine::CWaylandBack
 Aquamarine::CWaylandOutput::CWaylandOutput(const std::string& name_, Hyprutils::Memory::CWeakPointer<CWaylandBackend> backend_) : backend(backend_) {
     name = name_;
 
-    // The scheduler's frameReady signal drives the public events.frame on this output.
-    frameReadyListener = sched.frameReady.listen([this]() { events.frame.emit(); });
-
-    // Idle that emits the scheduled frame, fired via the core backend's idle queue
-    // (addIdleEvent), which the consumer's event loop pumps every iteration. Deliberately
-    // not the backend-local idleCallbacks vector: that only drains inside dispatchEvents,
-    // i.e. when the wayland fd is readable, so a frame scheduled with no host traffic
-    // pending (e.g. right after a focus change) would never fire.
-    frameIdle = makeShared<std::function<void(void)>>([this]() {
-        sched.setFrameScheduled(false);
-        if (sched.frameInFlight() || sched.frameRunning())
-            return;
-        sched.frameReady.emit();
-    });
-
     waylandState.surface = makeShared<CCWlSurface>(backend->waylandState.compositor->sendCreateSurface());
 
     if (!waylandState.surface->resource()) {
@@ -544,11 +497,7 @@ Aquamarine::CWaylandOutput::CWaylandOutput(const std::string& name_, Hyprutils::
             h = 720;
         }
         events.state.emit(SStateEvent{.size = {w, h}});
-        // Kick off the first frame synchronously: the consumer expects events.frame in
-        // the same dispatch cycle as the toplevel configure. Deferring via scheduleFrame's
-        // idle races the first commit and can leave the output blank until the next event.
-        needsFrame = true;
-        sched.frameReady.emit();
+        sendFrameAndSetCallback();
     });
 
     waylandState.xdgToplevel->setClose([this](CCXdgToplevel* r) { destroy(); });
@@ -570,8 +519,6 @@ Aquamarine::CWaylandOutput::CWaylandOutput(const std::string& name_, Hyprutils::
 
 Aquamarine::CWaylandOutput::~CWaylandOutput() {
     events.destroy.emit();
-    // frameIdle captures a raw this and may still be queued; pull it before we die.
-    backend->backend->removeIdleEvent(frameIdle);
     if (waylandState.xdgToplevel)
         waylandState.xdgToplevel->sendDestroy();
     if (waylandState.xdgSurface)
@@ -588,11 +535,7 @@ std::vector<SDRMFormat> Aquamarine::CWaylandOutput::getRenderFormats() {
 }
 
 bool Aquamarine::CWaylandOutput::pendingPageFlip() {
-    return sched.frameInFlight();
-}
-
-bool Aquamarine::CWaylandOutput::pendingIdleFrame() {
-    return sched.frameScheduled();
+    return false;
 }
 
 bool Aquamarine::CWaylandOutput::destroy() {
@@ -600,7 +543,6 @@ bool Aquamarine::CWaylandOutput::destroy() {
     waylandState.surface->sendAttach(nullptr, 0, 0);
     waylandState.surface->sendCommit();
     waylandState.frameCallback.reset();
-    sched.invalidate();
     std::erase(backend->outputs, self.lock());
     return true;
 }
@@ -664,29 +606,9 @@ bool Aquamarine::CWaylandOutput::commit() {
 
     waylandState.surface->sendAttach(wlBuffer->waylandState.buffer.get(), 0, 0);
     waylandState.surface->sendDamageBuffer(0, 0, INT32_MAX, INT32_MAX);
-
-    // Register the next wl_surface.frame callback as part of this commit's pending state,
-    // but only if one isn't already pending. A consumer that commits twice in quick
-    // succession (e.g. cursor + buffer) shares the in-flight callback — when it fires,
-    // onFrameDone runs and the next render cycle registers a fresh one. Mirrors DRM's
-    // "one flip in flight per CRTC" invariant, expressed via the scheduler.
-    //
-    // PROTOCOL: wl_surface.frame becomes part of pending state and takes effect on the
-    // NEXT wl_surface.commit. So the frame request must precede sendCommit() — sending
-    // it after commit would queue the callback for a future commit that never happens.
-    if (!sched.frameInFlight()) {
-        waylandState.frameCallback = makeShared<CCWlCallback>(waylandState.surface->sendFrame());
-        waylandState.frameCallback->setDone([this](CCWlCallback* r, uint32_t ms) { onFrameDone(); });
-        sched.onFrameSubmitted();
-    }
-
     waylandState.surface->sendCommit();
 
-    // Flush immediately: commit() runs from the consumer's render path, outside
-    // dispatchEvents() (which flushes only at its top). Without this the buffer commit and
-    // frame request sit unflushed, the host never sends wl_callback.done, the fd never
-    // becomes readable, and the frame loop deadlocks.
-    wl_display_flush(backend->waylandState.display);
+    readyForFrameCallback = true;
 
     events.commit.emit();
     state->onCommit();
@@ -720,19 +642,33 @@ SP<CWaylandBuffer> Aquamarine::CWaylandOutput::wlBufferFromBuffer(SP<IBuffer> bu
     return wlBuffer;
 }
 
+void Aquamarine::CWaylandOutput::sendFrameAndSetCallback() {
+    events.frame.emit();
+    frameScheduled = false;
+    if (waylandState.frameCallback || !readyForFrameCallback)
+        return;
+
+    waylandState.frameCallback = makeShared<CCWlCallback>(waylandState.surface->sendFrame());
+    waylandState.frameCallback->setDone([this](CCWlCallback* r, uint32_t ms) { onFrameDone(); });
+
+    waylandState.surface->sendCommit();
+}
+
 void Aquamarine::CWaylandOutput::onFrameDone() {
-    // Mirrors DRM's handlePF: settle scheduler state, emit present, then emit frame
-    // via the scheduler signal. The loop self-limits — if the consumer doesn't
-    // commit (its needsFrame bit clears in renderMonitor), no new wl_surface.frame
-    // is registered (registration lives in commit()), so no further done arrives.
     waylandState.frameCallback.reset();
-    sched.onFrameComplete();
-
-    CFrameRunningGuard frameRunning(sched);
-
+    readyForFrameCallback = false;
     events.present.emit(IOutput::SPresentEvent{.presented = true});
 
-    sched.frameReady.emit();
+    // FIXME: this is wrong, but otherwise we get bugs.
+    // thanks @phonetic112
+    scheduleFrame(AQ_SCHEDULE_NEEDS_FRAME);
+
+    if (frameScheduledWhileWaiting)
+        sendFrameAndSetCallback();
+    else
+        events.frame.emit();
+
+    frameScheduledWhileWaiting = false;
 }
 
 bool Aquamarine::CWaylandOutput::setCursor(Hyprutils::Memory::CSharedPointer<IBuffer> buffer, const Hyprutils::Math::Vector2D& hotspot) {
@@ -837,14 +773,22 @@ Hyprutils::Math::Vector2D Aquamarine::CWaylandOutput::cursorPlaneSize() {
 
 void Aquamarine::CWaylandOutput::scheduleFrame(const scheduleFrameReason reason) {
     TRACE(backend->backend->log(AQ_LOG_TRACE,
-                                std::format("CWaylandOutput::scheduleFrame: reason {}, needsFrame {}, canSchedule {}", (uint32_t)reason, needsFrame, sched.canSchedule())));
+                                std::format("CWaylandOutput::scheduleFrame: reason {}, needsFrame {}, frameScheduled {}", (uint32_t)reason, needsFrame, frameScheduled)));
     needsFrame = true;
 
-    if (!sched.canSchedule())
+    if (frameScheduled)
         return;
 
-    sched.setFrameScheduled(true);
-    backend->backend->addIdleEvent(frameIdle);
+    frameScheduled = true;
+
+    if (waylandState.frameCallback)
+        frameScheduledWhileWaiting = true;
+    else {
+        backend->idleCallbacks.emplace_back([w = self]() {
+            if (auto o = w.lock())
+                o->sendFrameAndSetCallback();
+        });
+    }
 }
 
 Aquamarine::CWaylandBuffer::CWaylandBuffer(SP<IBuffer> buffer_, Hyprutils::Memory::CWeakPointer<CWaylandBackend> backend_) : buffer(buffer_), backend(backend_) {

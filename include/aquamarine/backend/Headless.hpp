@@ -21,7 +21,6 @@ namespace Aquamarine {
         virtual bool                                                      destroy();
         virtual std::vector<SDRMFormat>                                   getRenderFormats();
         virtual bool                                                      pendingPageFlip();
-        virtual bool                                                      pendingIdleFrame();
 
         Hyprutils::Memory::CWeakPointer<CHeadlessOutput>                  self;
 

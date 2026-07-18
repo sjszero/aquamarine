@@ -27,7 +27,7 @@ bool Aquamarine::CDRMLegacyImpl::moveCursor(Hyprutils::Memory::CSharedPointer<SD
 bool Aquamarine::CDRMLegacyImpl::commitInternal(Hyprutils::Memory::CSharedPointer<SDRMConnector> connector, SDRMConnectorCommitData& data) {
     const auto& STATE = connector->output->state->state();
     SP<CDRMFB>  mainFB;
-    bool        enable = data.enabled;
+    bool        enable = STATE.enabled;
 
     if (enable) {
         if (!data.mainFB)
@@ -65,7 +65,7 @@ bool Aquamarine::CDRMLegacyImpl::commitInternal(Hyprutils::Memory::CSharedPointe
         }
     }
 
-    if (data.committed & COutputState::eOutputStateProperties::AQ_OUTPUT_STATE_ADAPTIVE_SYNC) {
+    if (STATE.committed & COutputState::eOutputStateProperties::AQ_OUTPUT_STATE_ADAPTIVE_SYNC) {
         if (STATE.adaptiveSync && !connector->canDoVrr) {
             connector->backend->backend->log(AQ_LOG_ERROR, std::format("legacy drm: connector {} can't do vrr", connector->id));
             return false;
@@ -87,7 +87,7 @@ bool Aquamarine::CDRMLegacyImpl::commitInternal(Hyprutils::Memory::CSharedPointe
     // TODO: gamma
 
     if (data.cursorFB && connector->crtc->cursor && connector->output->cursorVisible && enable &&
-        (data.committed & COutputState::AQ_OUTPUT_STATE_CURSOR_SHAPE || data.committed & COutputState::AQ_OUTPUT_STATE_CURSOR_POS)) {
+        (STATE.committed & COutputState::AQ_OUTPUT_STATE_CURSOR_SHAPE || STATE.committed & COutputState::AQ_OUTPUT_STATE_CURSOR_POS)) {
         uint32_t boHandle = 0;
         auto     attrs    = data.cursorFB->buffer->dmabuf();
 
@@ -137,7 +137,7 @@ bool Aquamarine::CDRMLegacyImpl::commitInternal(Hyprutils::Memory::CSharedPointe
         return false;
     }
 
-    connector->sched.onFrameSubmitted();
+    connector->isPageFlipPending = true;
 
     return true;
 }

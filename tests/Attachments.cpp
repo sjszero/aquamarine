@@ -17,17 +17,16 @@ int main() {
     Aquamarine::CAttachmentManager attachments;
     int                            ret = 0;
     EXPECT(attachments.has<CFooAttachment>(), false);
-    EXPECT(!!attachments.get<CFooAttachment>(), false);
+    EXPECT(attachments.get<CFooAttachment>(), nullptr);
     EXPECT(attachments.has<CBarAttachment>(), false);
-    EXPECT(!!attachments.get<CBarAttachment>(), false);
+    EXPECT(attachments.get<CBarAttachment>(), nullptr);
 
     auto foo = Hyprutils::Memory::makeShared<CFooAttachment>();
     attachments.add(foo);
     EXPECT(attachments.has<CFooAttachment>(), true);
     EXPECT(attachments.has<CBarAttachment>(), false);
     foo->counter++;
-    // cant work for now
-    //EXPECT(attachments.get<CFooAttachment>(), foo);
+    EXPECT(attachments.get<CFooAttachment>(), foo);
     EXPECT(attachments.get<CFooAttachment>()->counter, 1);
 
     attachments.add(Hyprutils::Memory::makeShared<CBarAttachment>());

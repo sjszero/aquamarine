@@ -17,6 +17,13 @@ using namespace Hyprutils::Math;
 Aquamarine::CHeadlessOutput::CHeadlessOutput(const std::string& name_, Hyprutils::Memory::CWeakPointer<CHeadlessBackend> backend_) : backend(backend_) {
     name = name_;
 
+    framecb = makeShared<std::function<void()>>([this]() {
+        frameScheduled = false;
+        // not sure about removing this since framecb might be called outside of scheduleFrames no?!
+        lastFrame      = std::chrono::steady_clock::now();
+        events.frame.emit();
+    });
+
     lastFrame = std::chrono::steady_clock::now();
 }
 
@@ -44,10 +51,6 @@ bool Aquamarine::CHeadlessOutput::pendingPageFlip() {
     return false;
 }
 
-bool Aquamarine::CHeadlessOutput::pendingIdleFrame() {
-    return frameScheduled;
-}
-
 Hyprutils::Memory::CSharedPointer<IBackendImplementation> Aquamarine::CHeadlessOutput::getBackend() {
     return backend.lock();
 }
@@ -57,18 +60,6 @@ void Aquamarine::CHeadlessOutput::scheduleFrame(const scheduleFrameReason reason
                                 std::format("CHeadlessOutput::scheduleFrame: reason {}, needsFrame {}, frameScheduled {}", (uint32_t)reason, needsFrame, frameScheduled)));
 
     needsFrame = true;
-
-    if (!framecb) {
-        framecb = makeShared<std::function<void()>>([this, weak = self]() {
-            if (!weak)
-                return;
-
-            frameScheduled = false;
-            // not sure about removing this since framecb might be called outside of scheduleFrames no?!
-            lastFrame = std::chrono::steady_clock::now();
-            events.frame.emit();
-        });
-    }
 
     if (frameScheduled)
         return;
@@ -98,7 +89,7 @@ void Aquamarine::CHeadlessOutput::scheduleFrame(const scheduleFrameReason reason
 
         if (framecb && *framecb)
             (*framecb)();
-
+        
         lastFrame = NEXT_FRAME_TIME;
     });
 }
@@ -184,19 +175,7 @@ std::vector<SDRMFormat> Aquamarine::CHeadlessBackend::getCursorFormats() {
 }
 
 bool Aquamarine::CHeadlessBackend::createOutput(const std::string& name) {
-    std::string outputName = name;
-    if (outputName.empty()) {
-        // skip past any auto-name slots already claimed by an explicit createOutput,
-        // so we never hand out a duplicate HEADLESS-N (see #185).
-        do {
-            outputName = std::format("HEADLESS-{}", ++outputIDCounter);
-        } while (std::ranges::any_of(outputs, [&outputName](const auto& o) { return o->name == outputName; }));
-    } else if (std::ranges::any_of(outputs, [&outputName](const auto& o) { return o->name == outputName; })) {
-        backend->log(AQ_LOG_ERROR, std::format("headless: refusing to create output {}, name already in use", outputName));
-        return false;
-    }
-
-    auto output = SP<CHeadlessOutput>(new CHeadlessOutput(outputName, self.lock()));
+    auto output = SP<CHeadlessOutput>(new CHeadlessOutput(name.empty() ? std::format("HEADLESS-{}", ++outputIDCounter) : name, self.lock()));
     outputs.emplace_back(output);
     output->modes.emplace_back(SP<SOutputMode>(new SOutputMode(Vector2D{1920, 1080}, 60000, true)));
     output->swapchain = CSwapchain::create(backend->primaryAllocator, self.lock());
@@ -213,9 +192,13 @@ void Aquamarine::CHeadlessBackend::dispatchTimers() {
         return;
     }
 
-    auto                it = std::stable_partition(timers.timers.begin(), timers.timers.end(), [](CTimer& t) { return !t.expired(); });
-
-    std::vector<CTimer> toFire(std::make_move_iterator(it), std::make_move_iterator(timers.timers.end()));
+    auto it = std::stable_partition(timers.timers.begin(), timers.timers.end(), 
+        [](CTimer& t) {
+            return !t.expired();
+        });
+    
+    std::vector<CTimer> toFire(std::make_move_iterator(it), 
+                               std::make_move_iterator(timers.timers.end()));
     timers.timers.erase(it, timers.timers.end());
 
     for (auto& timer : toFire) {
