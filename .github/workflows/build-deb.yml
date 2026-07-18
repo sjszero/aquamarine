@@ -86,7 +86,6 @@ jobs:
           # 输入/显示
           libseat-dev libinput-dev libudev-dev
           libdisplay-info-dev
-          # 运行时库（避免依赖问题）
           libdisplay-info3
           # DRM/GBM
           libdrm-dev libgbm-dev
@@ -127,7 +126,7 @@ jobs:
             apt-all-${{ runner.arch }}-
 
       # ==========================================================
-      # 4. 安装所有依赖（包含运行时库）
+      # 4. 安装所有依赖（从 backports 获取较新版本）
       # ==========================================================
       - name: Install all dependencies
         run: |
@@ -138,7 +137,6 @@ jobs:
             libegl1-mesa-dev libgles2-mesa-dev mesa-common-dev \
             libwayland-dev wayland-protocols \
             libseat-dev libinput-dev libudev-dev \
-            libdisplay-info-dev libdisplay-info3 \
             libdrm-dev libgbm-dev \
             libxkbcommon-dev \
             libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev \
@@ -146,13 +144,11 @@ jobs:
             libxcb-errors-dev libxrender-dev libxcomposite-dev \
             libxfixes-dev libxext-dev libxcursor-dev \
             libpixman-1-dev libcairo2-dev libpango1.0-dev libpangocairo-1.0-0 \
-            libhyprutils-dev libhyprlang-dev libhyprcursor-dev libhyprgraphics-dev \
             libpugixml-dev libtomlplusplus-dev \
             uuid-dev libsystemd-dev \
             libre2-dev libmuparser-dev liblcms2-dev \
             liblua5.4-dev \
-            hwdata \
-            libpipewire-0.3-dev libspa-0.2-dev
+            hwdata
 
       # ==========================================================
       # 5. 从 backports 安装较新的依赖
@@ -160,9 +156,10 @@ jobs:
       - name: Install backports dependencies
         run: |
           apt-get install -y -t trixie-backports --no-install-recommends \
-            libxkbcommon-dev wayland-protocols libdisplay-info-dev \
-            libdisplay-info3 \
-            libinput-dev libhyprutils-dev libhyprlang-dev \
+            libxkbcommon-dev wayland-protocols \
+            libdisplay-info-dev libdisplay-info3 \
+            libinput-dev \
+            libhyprutils-dev libhyprlang-dev \
             libhyprcursor-dev libhyprgraphics-dev \
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "Some backports packages may already be installed"
@@ -328,8 +325,10 @@ jobs:
       - name: Install Aquamarine .deb
         if: inputs.skip_aquamarine != true
         run: |
-          # 先确保运行时依赖已安装
-          apt-get install -y --no-install-recommends libdisplay-info3 || true
+          # 先确保运行时依赖已安装（从 backports）
+          apt-get install -y -t trixie-backports --no-install-recommends \
+            libdisplay-info3 || \
+            apt-get install -y --no-install-recommends libdisplay-info3 || true
           if [ -f /libaquamarine10_*.deb ]; then
             dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine10_*.deb
@@ -411,9 +410,10 @@ jobs:
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
-              libxkbcommon-dev wayland-protocols libdisplay-info-dev \
-              libdisplay-info3 \
-              libinput-dev libhyprutils-dev libhyprlang-dev \
+              libxkbcommon-dev wayland-protocols \
+              libdisplay-info-dev libdisplay-info3 \
+              libinput-dev \
+              libhyprutils-dev libhyprlang-dev \
               libhyprcursor-dev libhyprgraphics-dev \
               libpipewire-0.3-dev libspa-0.2-dev \
               || echo "Some packages may already be installed"
