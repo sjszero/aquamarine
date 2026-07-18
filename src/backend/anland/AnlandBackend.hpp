@@ -17,6 +17,9 @@ extern "C" {
 
 namespace Aquamarine {
 
+using Hyprutils::Memory::CSharedPointer;
+using Hyprutils::Memory::CWeakPointer;
+
 class CAnlandOutput;
 class CAnlandPointer;
 class CAnlandKeyboard;
@@ -24,14 +27,14 @@ class CAnlandTouch;
 
 class CAnlandBackend : public IBackendImplementation {
 public:
-    CAnlandBackend(Hyprutils::Memory::CSharedPointer<CBackend> backend,
+    CAnlandBackend(CSharedPointer<CBackend> backend,
                    const std::string& socketPath = "/run/display.sock");
     virtual ~CAnlandBackend();
 
     // IBackendImplementation
     virtual eBackendType type() override { return AQ_BACKEND_ANLAND; }
     virtual bool start() override;
-    virtual std::vector<Hyprutils::Memory::CSharedPointer<SPollFD>> pollFDs() override;
+    virtual std::vector<CSharedPointer<SPollFD>> pollFDs() override;
     virtual int drmFD() override { return -1; }
     virtual int drmRenderNodeFD() override { return -1; }
     virtual bool dispatchEvents() override;
@@ -40,14 +43,14 @@ public:
     virtual std::vector<SDRMFormat> getRenderFormats() override;
     virtual std::vector<SDRMFormat> getCursorFormats() override { return {}; }
     virtual bool createOutput(const std::string& name = "") override;
-    virtual Hyprutils::Memory::CSharedPointer<IAllocator> preferredAllocator() override { return nullptr; }
-    virtual std::vector<Hyprutils::Memory::CSharedPointer<IAllocator>> getAllocators() override { return {}; }
-    virtual Hyprutils::Memory::CWeakPointer<IBackendImplementation> getPrimary() override { return self; }
+    virtual CSharedPointer<IAllocator> preferredAllocator() override { return nullptr; }
+    virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override { return {}; }
+    virtual CWeakPointer<IBackendImplementation> getPrimary() override { return self; }
 
-    // 公共访问器（修复编译错误）
-    Hyprutils::Memory::CSharedPointer<CBackend> getBackend() const { return m_backend; }
+    // 公共访问器
+    CSharedPointer<CBackend> getBackend() const { return m_backend; }
     display_ctx* display() { return m_display; }
-    Hyprutils::Memory::CSharedPointer<CAnlandOutput> getOutput() const { return m_output; }
+    CSharedPointer<CAnlandOutput> getOutput() const { return m_output; }
     bool isConnected() const { return m_display != nullptr && !m_inFallback; }
     bool isFallback() const { return m_inFallback; }
 
@@ -55,7 +58,7 @@ public:
     void onOutputChanged();
     void shutdown();
 
-    Hyprutils::Memory::CWeakPointer<CAnlandBackend> self;
+    CWeakPointer<CAnlandBackend> self;
 
 private:
     void setupReconnectTimer();
@@ -69,14 +72,14 @@ private:
     void updateAudioFd();
     void updateCameraResources();
 
-    Hyprutils::Memory::CSharedPointer<CBackend> m_backend;
+    CSharedPointer<CBackend> m_backend;
     std::string m_socketPath;
     display_ctx* m_display = nullptr;
 
-    Hyprutils::Memory::CSharedPointer<CAnlandOutput> m_output;
-    Hyprutils::Memory::CSharedPointer<CAnlandPointer> m_pointer;
-    Hyprutils::Memory::CSharedPointer<CAnlandKeyboard> m_keyboard;
-    Hyprutils::Memory::CSharedPointer<CAnlandTouch> m_touch;
+    CSharedPointer<CAnlandOutput> m_output;
+    CSharedPointer<CAnlandPointer> m_pointer;
+    CSharedPointer<CAnlandKeyboard> m_keyboard;
+    CSharedPointer<CAnlandTouch> m_touch;
 
     bool m_running = false;
     bool m_inFallback = true;

@@ -88,7 +88,7 @@ jobs:
           libdisplay-info-dev
           # DRM/GBM
           libdrm-dev libgbm-dev
-          # X11 相关 (Hyprland 需要)
+          # X11 相关
           libxkbcommon-dev
           libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev
           libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev
@@ -96,7 +96,7 @@ jobs:
           libxfixes-dev libxext-dev libxcursor-dev
           # 图形/渲染
           libpixman-1-dev libcairo2-dev libpango1.0-dev libpangocairo-1.0-0
-          # Hyprland 依赖库（带 lib 前缀）
+          # Hyprland 生态库
           libhyprutils-dev libhyprlang-dev libhyprcursor-dev libhyprgraphics-dev
           # 其他
           libpugixml-dev libtomlplusplus-dev
@@ -104,6 +104,10 @@ jobs:
           libre2-dev libmuparser-dev liblcms2-dev
           liblua5.4-dev
           hwdata
+          # PipeWire 音频/摄像头支持
+          libpipewire-0.3-dev libspa-0.2-dev
+          # epoll-shim (timerfd 备选)
+          libepoll-shim-dev
           EOF
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
           echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
@@ -123,7 +127,7 @@ jobs:
             apt-all-${{ runner.arch }}-
 
       # ==========================================================
-      # 4. 安装所有依赖（包名已修正）
+      # 4. 安装所有依赖（包含 PipeWire）
       # ==========================================================
       - name: Install all dependencies
         run: |
@@ -147,7 +151,9 @@ jobs:
             uuid-dev libsystemd-dev \
             libre2-dev libmuparser-dev liblcms2-dev \
             liblua5.4-dev \
-            hwdata
+            hwdata \
+            libpipewire-0.3-dev libspa-0.2-dev \
+            libepoll-shim-dev
 
       # ==========================================================
       # 5. 从 backports 安装较新的依赖
@@ -158,6 +164,7 @@ jobs:
             libxkbcommon-dev wayland-protocols libdisplay-info-dev \
             libinput-dev libhyprutils-dev libhyprlang-dev \
             libhyprcursor-dev libhyprgraphics-dev \
+            libpipewire-0.3-dev libspa-0.2-dev \
             || echo "Some backports packages may already be installed"
 
       # ==========================================================
@@ -405,6 +412,7 @@ jobs:
               libxkbcommon-dev wayland-protocols libdisplay-info-dev \
               libinput-dev libhyprutils-dev libhyprlang-dev \
               libhyprcursor-dev libhyprgraphics-dev \
+              libpipewire-0.3-dev libspa-0.2-dev \
               || echo "Some packages may already be installed"
             apt-get build-dep -y ./
           }

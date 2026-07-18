@@ -9,11 +9,21 @@
 #include <cstring>
 #include <cstdio>
 #include <cerrno>
+#include <chrono>
 
 #define ANLAND_LOG(fmt, ...) fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__)
 #define ANLAND_ERR(fmt, ...) fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__)
 
 namespace Aquamarine {
+
+using Hyprutils::Memory::CSharedPointer;
+using Hyprutils::Memory::makeShared;
+
+static uint32_t getCurrentTimeMs() {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
+}
 
 // 全局 EGL 函数指针（由 Hyprland 的 OpenGL 上下文提供）
 static PFNEGLCREATEIMAGEKHRPROC g_eglCreateImageKHR = nullptr;

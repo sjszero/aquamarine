@@ -27,21 +27,20 @@ extern "C" {
 
 namespace Aquamarine {
 
+using Hyprutils::Memory::CSharedPointer;
+using Hyprutils::Memory::makeShared;
+
 class CAnlandBackend;
 class CAnlandBuffer;
 
 /**
  * 缓冲区槽位 - 管理单个 dmabuf 的所有资源
- *
- * 借鉴 KWin 的 AnlandEglLayer 设计：
- * - 每个缓冲区独立管理 EGLImage、GL 纹理和 FBO
- * - 记录损伤区域，支持 buffer-age 优化
  */
 struct BufferSlot {
     // dmabuf 信息
     int fd = -1;
     uint32_t width = 0, height = 0;
-    uint32_t format = 0;       // 消费者端格式
+    uint32_t format = 0;
     uint64_t modifier = 0;
     uint32_t offset = 0;
     uint32_t stride = 0;
@@ -55,28 +54,19 @@ struct BufferSlot {
     CSharedPointer<CAnlandBuffer> buffer;
 
     // 状态标志
-    bool imported = false;      // 是否已导入
-    bool inUse = false;         // 是否正在使用
-    bool rendered = false;      // 是否已渲染
-    bool displayed = false;     // 是否已显示
-    bool failed = false;        // 导入是否失败
+    bool imported = false;
+    bool inUse = false;
+    bool rendered = false;
+    bool displayed = false;
+    bool failed = false;
 
-    // 损伤区域跟踪（借鉴 KWin 的 m_accumDamage）
+    // 损伤区域跟踪
     Hyprutils::Math::CRegion accumDamage;
     bool hasDamage = true;
 };
 
 /**
  * AnlandOutput - 虚拟显示输出
- *
- * 直接管理消费者的 dmabuf 缓冲区，渲染到 EGLImage/FBO，
- * 并触发 buffer-ready 事件驱动帧同步。
- *
- * 设计亮点（借鉴 KWin）：
- * 1. Per-buffer 损伤区域：m_slots[i].accumDamage
- * 2. 帧同步：scheduleFrame() + idle 事件
- * 3. 热插拔：enterFallback() / exitFallback()
- * 4. 多缓冲支持：最多 8 个槽位
  */
 class CAnlandOutput : public IOutput {
 public:
@@ -89,7 +79,6 @@ public:
     virtual CSharedPointer<IBackendImplementation> getBackend() override;
     virtual std::vector<SDRMFormat> getRenderFormats() override;
     virtual bool pendingPageFlip() override { return m_framePending; }
-    virtual bool pendingIdleFrame() override { return m_needsFrame || m_frameScheduled; }
     virtual void scheduleFrame(scheduleFrameReason reason = AQ_SCHEDULE_UNKNOWN) override;
     virtual size_t getGammaSize() override { return 0; }
     virtual size_t getDeGammaSize() override { return 0; }
@@ -142,7 +131,7 @@ private:
     uint32_t protocolFormatToDrm(uint32_t fmt) const;
     void selectNextBuffer();
 
-    // 损伤区域处理（借鉴 KWin）
+    // 损伤区域处理
     void markDamage(int index, const Hyprutils::Math::CRegion& damage);
     void clearDamage(int index);
 
@@ -155,9 +144,9 @@ private:
     // 缓冲区槽位
     std::array<BufferSlot, MAX_BUFS> m_slots;
     int m_bufferCount = 0;
-    int m_selectedIndex = 0;    // 当前渲染目标
-    int m_frontIndex = 0;       // 当前显示目标
-    int m_backIndex = 0;        // 下一个渲染目标
+    int m_selectedIndex = 0;
+    int m_frontIndex = 0;
+    int m_backIndex = 0;
 
     // EGL 状态
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
@@ -173,7 +162,7 @@ private:
 
     // 帧调度
     bool m_frameScheduled = false;
-    Hyprutils::Memory::CSharedPointer<std::function<void(void)>> m_frameIdle;
+    CSharedPointer<std::function<void(void)>> m_frameIdle;
 
     // 尺寸
     uint32_t m_width = 1920;

@@ -8,11 +8,22 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstdio>
+#include <chrono>
 
 #define ANLAND_LOG(fmt, ...) fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__)
 #define ANLAND_ERR(fmt, ...) fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__)
 
 namespace Aquamarine {
+
+using Hyprutils::Memory::CSharedPointer;
+using Hyprutils::Memory::makeShared;
+
+// 辅助函数
+static uint32_t getCurrentTimeMs() {
+    auto now = std::chrono::steady_clock::now();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        now.time_since_epoch()).count();
+}
 
 static void anland_fallback_callback(void* data) {
     auto* backend = static_cast<CAnlandBackend*>(data);

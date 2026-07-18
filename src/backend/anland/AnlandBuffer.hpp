@@ -3,6 +3,7 @@
 #define AQUAMARINE_ANLAND_BUFFER_HPP
 
 #include <aquamarine/buffer/Buffer.hpp>
+#include <hyprutils/memory/SharedPtr.hpp>
 #include <hyprutils/math/Vector2D.hpp>
 
 extern "C" {
@@ -11,19 +12,15 @@ extern "C" {
 
 namespace Aquamarine {
 
+using Hyprutils::Memory::CSharedPointer;
+
 class CAnlandBackend;
 
-/**
- * AnlandBuffer - 封装消费者提供的 dmabuf
- *
- * 继承自 IBuffer，提供 dmabuf 属性查询和可选的 CPU 访问。
- */
 class CAnlandBuffer : public IBuffer {
 public:
     CAnlandBuffer(display_ctx* display, int index, CAnlandBackend* backend);
     virtual ~CAnlandBuffer();
 
-    // IBuffer 实现
     virtual eBufferCapability caps() override {
         return BUFFER_CAPABILITY_DATAPTR;
     }
@@ -52,7 +49,6 @@ private:
     bool m_good = false;
     bool m_locked = false;
 
-    // CPU 访问
     void* m_mappedData = nullptr;
     size_t m_mappedSize = 0;
     bool m_mapped = false;
