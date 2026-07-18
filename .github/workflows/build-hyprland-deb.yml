@@ -32,7 +32,7 @@ jobs:
 
     steps:
       # ==========================================================
-      # 1. 设置 Debian 源
+      # 1. 设置 Debian 源（优先使用 backports）
       # ==========================================================
       - name: Setup sources
         run: |
@@ -48,6 +48,10 @@ jobs:
           EOF
           # 删除可能存在的重复源文件
           rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
+          # 配置 APT 优先从 backports 安装
+          cat > /etc/apt/apt.conf.d/99backports << 'EOF'
+          APT::Default-Release "trixie";
+          EOF
           apt-get update
 
       # ==========================================================
@@ -59,6 +63,7 @@ jobs:
           cat > /tmp/apt-packages.txt << 'EOF'
           devscripts build-essential fakeroot dpkg-dev quilt debhelper-compat
           cmake pkg-config git wget curl ca-certificates gnupg
+          libxkbcommon-dev wayland-protocols
           EOF
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
           echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
@@ -87,7 +92,17 @@ jobs:
             cmake pkg-config git wget curl ca-certificates gnupg
 
       # ==========================================================
-      # 5. 检出仓库（获取补丁）
+      # 5. 从 backports 安装较新的依赖
+      # ==========================================================
+      - name: Install backports dependencies
+        run: |
+          # 从 backports 安装 libxkbcommon-dev 和 wayland-protocols
+          apt-get install -y -t trixie-backports --no-install-recommends \
+            libxkbcommon-dev wayland-protocols \
+            || echo "Some backports packages may already be installed"
+
+      # ==========================================================
+      # 6. 检出仓库（获取补丁）
       # ==========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -96,7 +111,7 @@ jobs:
           fetch-depth: 1
 
       # ==========================================================
-      # 6. 生成补丁哈希
+      # 7. 生成补丁哈希
       # ==========================================================
       - name: Generate patch hash
         id: patch-hash
@@ -112,7 +127,7 @@ jobs:
       # 第一部分：构建 Aquamarine（Anland 版本，源码已包含）
       # ==========================================================
 
-      # ---------- 7. Aquamarine 源码缓存 ----------
+      # ---------- 8. Aquamarine 源码缓存 ----------
       - name: Cache Aquamarine source
         id: aqua-src-cache
         uses: actions/cache@v4
@@ -123,7 +138,7 @@ jobs:
             src-aqua-${{ inputs.aquamarine_version }}-
             src-aqua-
 
-      # ---------- 8. 获取 Aquamarine 源码 ----------
+      # ---------- 9. 获取 Aquamarine 源码 ----------
       - name: Fetch Aquamarine source
         if: steps.aqua-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -136,7 +151,7 @@ jobs:
           echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
           echo "srcdir=${SRCDIR}"
 
-      # ---------- 9. 修改 Aquamarine changelog ----------
+      # ---------- 10. 修改 Aquamarine changelog ----------
       - name: Bump Aquamarine changelog
         if: steps.aqua-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -146,23 +161,21 @@ jobs:
           dch --newversion "$NEW_VER" "Anland backend (CI build)"
           echo "Aqua version: $NEW_VER"
 
-      # ---------- 10. 安装 Aquamarine build-dep ----------
+      # ---------- 11. 安装 Aquamarine build-dep ----------
       - name: Install Aquamarine build dependencies
         run: |
           cd ${{ steps.aqua-src-dir.outputs.srcdir }}
           apt-get build-dep -y ./ || apt-get build-dep -y ${{ env.AQUA_SRC }}
 
-      # ---------- 11. 构建 Aquamarine .deb ----------
+      # ---------- 12. 构建 Aquamarine .deb ----------
       - name: Build Aquamarine .deb
         run: |
           cd ${{ steps.aqua-src-dir.outputs.srcdir }}
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
-      # ---------- 12. 安装 Aquamarine .deb（修正：使用 libaquamarine* 匹配） ----------
+      # ---------- 13. 安装 Aquamarine .deb ----------
       - name: Install Aquamarine .deb
         run: |
-          # Aquamarine 生成的包名是 libaquamarine10 和 libaquamarine-dev
-          # 使用通配符匹配所有 aquamarine 相关的 .deb
           ls -la ./*aquamarine*.deb 2>/dev/null || echo "No aquamarine debs found"
           dpkg -i ./*aquamarine*.deb || apt-get install -f -y
           dpkg -i ./*aquamarine*.deb
@@ -171,7 +184,7 @@ jobs:
       # 第二部分：构建 Hyprland（打 Anland 补丁）
       # ==========================================================
 
-      # ---------- 13. Hyprland 源码缓存 ----------
+      # ---------- 14. Hyprland 源码缓存 ----------
       - name: Cache Hyprland source
         id: hypr-src-cache
         uses: actions/cache@v4
@@ -182,7 +195,7 @@ jobs:
             src-hypr-${{ inputs.hyprland_version }}-
             src-hypr-
 
-      # ---------- 14. 获取 Hyprland 源码 ----------
+      # ---------- 15. 获取 Hyprland 源码 ----------
       - name: Fetch Hyprland source
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -194,7 +207,7 @@ jobs:
           SRCDIR=$(find . -maxdepth 1 -type d -name "${{ env.HYPR_SRC }}-*" | head -1)
           echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
 
-      # ---------- 15. 应用 Hyprland Anland 补丁 ----------
+      # ---------- 16. 应用 Hyprland Anland 补丁 ----------
       - name: Apply Anland patch to Hyprland
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -209,7 +222,7 @@ jobs:
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
 
-      # ---------- 16. 修改 Hyprland changelog ----------
+      # ---------- 17. 修改 Hyprland changelog ----------
       - name: Bump Hyprland changelog
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -219,26 +232,37 @@ jobs:
           dch --newversion "$NEW_VER" "Add Anland backend support (CI build)"
           echo "Hypr version: $NEW_VER"
 
-      # ---------- 17. 安装 Hyprland build-dep ----------
+      # ---------- 18. 安装 Hyprland build-dep（从 backports 解决依赖） ----------
       - name: Install Hyprland build dependencies
         run: |
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
-          apt-get build-dep -y ./ || apt-get build-dep -y ${{ env.HYPR_SRC }}
+          # 先尝试直接安装 build-dep
+          apt-get build-dep -y ./ || {
+            echo "build-dep failed, trying with backports..."
+            # 如果失败，尝试从 backports 安装缺失的依赖
+            apt-get install -y -t trixie-backports --no-install-recommends \
+              libxkbcommon-dev wayland-protocols libdisplay-info-dev \
+              libinput-dev hyprwayland-scanner hyprutils-dev \
+              hyprlang-dev hyprcursor-dev hyprgraphics-dev \
+              || echo "Some packages may already be installed"
+            # 再次尝试
+            apt-get build-dep -y ./
+          }
 
-      # ---------- 18. 构建 Hyprland .deb ----------
+      # ---------- 19. 构建 Hyprland .deb ----------
       - name: Build Hyprland .deb
         run: |
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
-      # ---------- 19. 收集所有 .deb ----------
+      # ---------- 20. 收集所有 .deb ----------
       - name: Collect all artifacts
         run: |
           mkdir -p artifacts
           find . -maxdepth 1 -name "*.deb" -exec cp {} artifacts/ \;
           ls -la artifacts/
 
-      # ---------- 20. 上传所有 .deb ----------
+      # ---------- 21. 上传所有 .deb ----------
       - name: Upload all debs
         uses: actions/upload-artifact@v4
         with:
@@ -246,7 +270,7 @@ jobs:
           path: artifacts/*.deb
           retention-days: 7
 
-      # ---------- 21. 构建摘要 ----------
+      # ---------- 22. 构建摘要 ----------
       - name: Summary
         run: |
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
