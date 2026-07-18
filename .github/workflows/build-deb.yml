@@ -3,7 +3,6 @@ name: 🏗️ Build Anland (Aquamarine & Hyprland)
 on:
   workflow_dispatch:
     inputs:
-      # ----- 源码版本/分支 -----
       aquamarine_branch:
         description: 'Aquamarine branch (GitHub)'
         required: true
@@ -14,7 +13,6 @@ on:
         required: true
         default: '0.55.2+ds-1~bpo13+1'
 
-      # ----- 构建开关 -----
       skip_aquamarine:
         description: 'Skip Aquamarine build (use pre-installed)'
         required: false
@@ -25,8 +23,6 @@ on:
         required: false
         default: false
         type: boolean
-
-      # ----- 缓存控制 -----
       clean_cache:
         description: 'Clean all caches and rebuild from scratch'
         required: false
@@ -46,9 +42,6 @@ jobs:
       options: --privileged --user root
 
     steps:
-      # ==========================================================
-      # 1. 设置 Debian 源（包含 sid）
-      # ==========================================================
       - name: Setup sources
         run: |
           cat > /etc/apt/sources.list << 'EOF'
@@ -69,9 +62,6 @@ jobs:
           EOF
           apt-get update
 
-      # ==========================================================
-      # 2. 生成 APT 哈希
-      # ==========================================================
       - name: Generate APT package list hash
         id: apt-hash
         shell: bash
@@ -101,9 +91,6 @@ jobs:
           PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
           echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
 
-      # ==========================================================
-      # 3. APT 缓存
-      # ==========================================================
       - name: Cache APT packages
         id: apt-cache
         uses: actions/cache@v4
@@ -115,9 +102,6 @@ jobs:
           restore-keys: |
             apt-all-${{ runner.arch }}-
 
-      # ==========================================================
-      # 4. 安装所有依赖
-      # ==========================================================
       - name: Install all dependencies
         run: |
           apt-get install -y --no-install-recommends \
@@ -140,9 +124,6 @@ jobs:
             liblua5.4-dev \
             hwdata
 
-      # ==========================================================
-      # 5. 从 backports 安装 Hyprland 生态库
-      # ==========================================================
       - name: Install backports dependencies
         run: |
           apt-get install -y -t trixie-backports --no-install-recommends \
@@ -153,18 +134,12 @@ jobs:
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "Some backports packages may already be installed"
 
-      # ==========================================================
-      # 6. 从 sid 安装 libdisplay-info
-      # ==========================================================
       - name: Install libdisplay-info from sid
         run: |
           apt-get install -y -t sid --no-install-recommends \
             libdisplay-info-dev libdisplay-info3 \
             || echo "Failed to install libdisplay-info from sid"
 
-      # ==========================================================
-      # 7. 构建 hyprwayland-scanner
-      # ==========================================================
       - name: Cache hyprwayland-scanner
         id: scanner-cache
         uses: actions/cache@v4
@@ -190,17 +165,11 @@ jobs:
           export PATH=/usr/local/bin:$PATH
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
 
-      # ==========================================================
-      # 8. 检出仓库（获取补丁）
-      # ==========================================================
       - name: Checkout repository (for hyprland patch)
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # ==========================================================
-      # 9. 验证补丁文件
-      # ==========================================================
       - name: Verify patch file
         id: patch-hash
         shell: bash
@@ -214,16 +183,12 @@ jobs:
             echo "hypr_patch_hash=no-patch" >> $GITHUB_OUTPUT
           fi
 
-      # ==========================================================
-      # 10. 清理缓存（如果请求）
-      # ==========================================================
       - name: Clean caches if requested
         if: inputs.clean_cache == true
         run: |
           echo "🧹 Cleaning caches as requested..."
           rm -rf /tmp/aqua-install /tmp/hypr-install
           rm -rf aquamarine*/ hyprland*/
-          dpkg -r libaquamarine10 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           apt-get clean
@@ -238,7 +203,6 @@ jobs:
         if: inputs.skip_aquamarine != true
         run: echo "Starting Aquamarine build..."
 
-      # ---------- 11. 克隆 Aquamarine ----------
       - name: Clone Aquamarine (Anland) from GitHub
         if: inputs.skip_aquamarine != true
         uses: actions/checkout@v4
@@ -248,7 +212,6 @@ jobs:
           path: aquamarine
           fetch-depth: 1
 
-      # ---------- 12. 获取 Aquamarine commit ----------
       - name: Get Aquamarine commit
         id: aqua-commit
         if: inputs.skip_aquamarine != true
@@ -258,7 +221,6 @@ jobs:
           COMMIT=$(git rev-parse HEAD)
           echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
 
-      # ---------- 13. Aquamarine 构建缓存 ----------
       - name: Cache Aquamarine build
         id: aqua-build-cache
         if: inputs.skip_aquamarine != true
@@ -272,7 +234,6 @@ jobs:
             aqua-build-${{ steps.aqua-commit.outputs.commit }}-
             aqua-build-
 
-      # ---------- 14. 构建 Aquamarine ----------
       - name: Build Aquamarine (Anland)
         if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
         run: |
@@ -291,7 +252,6 @@ jobs:
           make -j$(nproc)
           make install DESTDIR=/tmp/aqua-install
 
-      # ---------- 15. 打包 Aquamarine .deb ----------
       - name: Package Aquamarine .deb
         if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
         run: |
@@ -323,19 +283,21 @@ jobs:
           cd /
           dpkg-deb --build /tmp/aqua-install /libaquamarine11_0.11.0-anland1_arm64.deb
 
-      # ---------- 16. 安装 Aquamarine .deb ----------
       - name: Install Aquamarine .deb
         if: inputs.skip_aquamarine != true
         run: |
-          dpkg -r libaquamarine10 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
           apt-get install -y -t sid --no-install-recommends libdisplay-info3 || \
             apt-get install -y --no-install-recommends libdisplay-info3 || true
-          if [ -f /libaquamarine10_*.deb ]; then
-            dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
-            dpkg -i /libaquamarine10_*.deb
+          if [ -f /libaquamarine11_*.deb ]; then
+            dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
+            dpkg -i /libaquamarine11_*.deb
+            ldconfig
+            echo "✅ Aquamarine installed:"
+            dpkg -l | grep aquamarine || true
+            ls -la /usr/lib/aarch64-linux-gnu/libaquamarine* || true
           else
             echo "⚠️ Aquamarine .deb not found, attempting to install from cache..."
             if [ -d /tmp/aqua-install ]; then
@@ -343,9 +305,10 @@ jobs:
               find usr -type f -exec chmod 644 {} \;
               find usr/lib -name '*.so*' -exec chmod 755 {} \; 2>/dev/null || true
               cd /
-              dpkg-deb --build /tmp/aqua-install /libaquamarine10_0.11.0-anland1_arm64.deb
-              dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
-              dpkg -i /libaquamarine10_*.deb
+              dpkg-deb --build /tmp/aqua-install /libaquamarine11_0.11.0-anland1_arm64.deb
+              dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
+              dpkg -i /libaquamarine11_*.deb
+              ldconfig
             else
               echo "❌ No Aquamarine build found."
               exit 1
@@ -359,7 +322,6 @@ jobs:
         if: inputs.skip_hyprland != true
         run: echo "Starting Hyprland build..."
 
-      # ---------- 17. Hyprland 源码缓存 ----------
       - name: Cache Hyprland source
         id: hypr-src-cache
         if: inputs.skip_hyprland != true
@@ -371,13 +333,11 @@ jobs:
             src-hypr-${{ inputs.hyprland_version }}-
             src-hypr-
 
-      # ---------- 18. 获取 Hyprland Debian 源码 ----------
       - name: Fetch Hyprland source
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
           apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
 
-      # ---------- 19. 应用 Hyprland Anland 补丁 ----------
       - name: Apply Anland patch to Hyprland
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -392,7 +352,6 @@ jobs:
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
 
-      # ---------- 20. 修改 Hyprland changelog ----------
       - name: Bump Hyprland changelog
         if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
@@ -406,20 +365,17 @@ jobs:
             echo "Hypr changelog already has +anland1 suffix, skipping"
           fi
 
-      # ---------- 21. 安装 Hyprland build-dep ----------
       - name: Install Hyprland build dependencies
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
-          # 1. 先移除所有 Aquamarine 包
-          dpkg -r libaquamarine10 2>/dev/null || true
+          # 移除任何残留的 Aquamarine 包
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
-          # 清理自动安装的依赖
           apt autoremove -y || true
-          
-          # 2. 运行 build-dep
+
+          # 安装 build-dep
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
@@ -431,39 +387,42 @@ jobs:
               || echo "Some packages may already be installed"
             apt-get build-dep -y ./
           }
-          
-          # 3. 删除刚才 build-dep 安装的 Aquamarine（sid 版本）
-          dpkg -r libaquamarine10 2>/dev/null || true
+
+          # 移除 build-dep 安装的 sid Aquamarine
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
           apt autoremove -y || true
-          
-          # 4. 安装我们自己构建的 Aquamarine（包含 Anland）
-          if [ -f /libaquamarine10_*.deb ]; then
-            dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
-            dpkg -i /libaquamarine10_*.deb
+
+          # 重新安装我们自己构建的 Aquamarine
+          if [ -f /libaquamarine11_*.deb ]; then
+            dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
+            dpkg -i /libaquamarine11_*.deb
+            ldconfig
+            echo "✅ Aquamarine reinstalled:"
+            dpkg -l | grep aquamarine || true
           else
             echo "⚠️ Aquamarine .deb not found, skipping reinstall"
           fi
 
-      # ---------- 22. 构建 Hyprland .deb ----------
       - name: Build Hyprland .deb
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
+          # 再次确保 Aquamarine 已安装
+          ldconfig
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
       # ==========================================================
-      # 23. 收集 artifacts
+      # 收集 artifacts
       # ==========================================================
       - name: Collect artifacts
         shell: bash
         run: |
           mkdir -p artifacts
 
-          if [ -f /libaquamarine10_*.deb ]; then
-            cp /libaquamarine10_*.deb artifacts/
+          if [ -f /libaquamarine11_*.deb ]; then
+            cp /libaquamarine11_*.deb artifacts/
             echo "✅ Copied Aquamarine .deb"
           else
             echo "⚠️ No Aquamarine .deb found"
@@ -488,9 +447,6 @@ jobs:
           echo "=== Final artifacts ==="
           ls -la artifacts/
 
-      # ==========================================================
-      # 24. 上传 artifacts
-      # ==========================================================
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -498,9 +454,6 @@ jobs:
           path: artifacts/*.deb
           retention-days: 7
 
-      # ==========================================================
-      # 25. 构建摘要
-      # ==========================================================
       - name: Summary
         run: |
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
@@ -519,6 +472,6 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Install" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "sudo dpkg -i libaquamarine10_*.deb hyprland_*.deb hyprland-backgrounds_*.deb" >> $GITHUB_STEP_SUMMARY
+          echo "sudo dpkg -i libaquamarine11_*.deb hyprland_*.deb hyprland-backgrounds_*.deb" >> $GITHUB_STEP_SUMMARY
           echo "sudo apt-get install -f -y" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
