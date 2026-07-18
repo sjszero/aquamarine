@@ -1,3 +1,4 @@
+// src/backend/Backend.cpp
 #include <aquamarine/backend/Backend.hpp>
 #include <aquamarine/backend/Wayland.hpp>
 #include <aquamarine/backend/Headless.hpp>
@@ -15,6 +16,10 @@
 
 #include "Logger.hpp"
 
+#ifdef HAS_ANLAND_BACKEND
+#include "anland/AnlandBackend.hpp"
+#endif
+
 using namespace Hyprutils::Memory;
 using namespace Hyprutils::OS;
 using namespace Aquamarine;
@@ -22,6 +27,13 @@ using namespace Aquamarine;
 
 #define TIMESPEC_NSEC_PER_SEC 1000000000LL
 
+/* ============================================================
+ * 辅助函数
+ * ============================================================ */
+
+/**
+ * 时间戳增加纳秒
+ */
 static void timespecAddNs(timespec* pTimespec, int64_t delta) {
     int delta_ns_low = delta % TIMESPEC_NSEC_PER_SEC;
     int delta_s_high = delta / TIMESPEC_NSEC_PER_SEC;
@@ -35,29 +47,92 @@ static void timespecAddNs(timespec* pTimespec, int64_t delta) {
     }
 }
 
+/**
+ * 后端类型名称
+ */
 static const char* backendTypeToName(eBackendType type) {
     switch (type) {
-        case AQ_BACKEND_DRM: return "drm";
-        case AQ_BACKEND_HEADLESS: return "headless";
-        case AQ_BACKEND_WAYLAND: return "wayland";
-        default: break;
+        case AQ_BACKEND_DRM:        return "drm";
+        case AQ_BACKEND_HEADLESS:   return "headless";
+        case AQ_BACKEND_WAYLAND:    return "wayland";
+        case AQ_BACKEND_NULL:       return "null";
+#ifdef HAS_ANLAND_BACKEND
+        case AQ_BACKEND_ANLAND:     return "anland";
+#endif
+        default:                    break;
     }
     return "invalid";
 }
+
+/**
+ * 检查是否为 Anland 后端
+ */
+static bool isAnlandBackend(eBackendType type) {
+#ifdef HAS_ANLAND_BACKEND
+    return type == AQ_BACKEND_ANLAND;
+#else
+    (void)type;
+    return false;
+#endif
+}
+
+/**
+ * 检查是否有 Anland 后端实现
+ */
+static bool hasAnlandImplementation(const std::vector<SP<IBackendImplementation>>& impls) {
+#ifdef HAS_ANLAND_BACKEND
+    for (auto const& impl : impls) {
+        if (impl->type() == AQ_BACKEND_ANLAND) {
+            return true;
+        }
+    }
+#endif
+    return false;
+}
+
+/* ============================================================
+ * SBackendImplementationOptions
+ * ============================================================ */
+
+Aquamarine::SBackendImplementationOptions::SBackendImplementationOptions()
+    : backendType(AQ_BACKEND_WAYLAND)
+    , backendRequestMode(AQ_BACKEND_REQUEST_IF_AVAILABLE) {
+    ;
+}
+
+/* ============================================================
+ * SBackendOptions
+ * ============================================================ */
+
+Aquamarine::SBackendOptions::SBackendOptions()
+    : logFunction(nullptr) {
+    ;
+}
+
+/* ============================================================
+ * CBackend 构造/析构
+ * ============================================================ */
 
 Aquamarine::CBackend::CBackend() {
     ;
 }
 
-Aquamarine::SBackendImplementationOptions::SBackendImplementationOptions() : backendType(AQ_BACKEND_WAYLAND), backendRequestMode(AQ_BACKEND_REQUEST_IF_AVAILABLE) {
-    ;
+Aquamarine::CBackend::~CBackend() {
+    if (idle.fd >= 0)
+        close(idle.fd);
+
+    // 先清除实现，再销毁 logger
+    implementations.clear();
 }
 
-Aquamarine::SBackendOptions::SBackendOptions() : logFunction(nullptr) {
-    ;
-}
+/* ============================================================
+ * CBackend::create() - 工厂方法
+ * ============================================================ */
 
-Hyprutils::Memory::CSharedPointer<CBackend> Aquamarine::CBackend::create(const std::vector<SBackendImplementationOptions>& backends, const SBackendOptions& options) {
+Hyprutils::Memory::CSharedPointer<CBackend> Aquamarine::CBackend::create(
+    const std::vector<SBackendImplementationOptions>& backends,
+    const SBackendOptions& options) {
+
     auto backend = SP<CBackend>(new CBackend());
 
     backend->options               = options;
@@ -74,51 +149,123 @@ Hyprutils::Memory::CSharedPointer<CBackend> Aquamarine::CBackend::create(const s
 
     backend->log(AQ_LOG_DEBUG, "Creating an Aquamarine backend!");
 
-    for (auto const& b : backends) {
+    backend->idle.fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+
+    /* ============================================================
+     * 构建有效后端列表（检测 ANLAND 环境变量）
+     * ============================================================ */
+    std::vector<SBackendImplementationOptions> effectiveBackends;
+
+#ifdef HAS_ANLAND_BACKEND
+    const char* anlandEnv = getenv("ANLAND");
+    if (anlandEnv && strcmp(anlandEnv, "1") == 0) {
+        backend->log(AQ_LOG_DEBUG, "ANLAND=1 detected, Anland backend will be primary");
+
+        // Anland 作为强制后端
+        SBackendImplementationOptions anlandOpt;
+        anlandOpt.backendType = AQ_BACKEND_ANLAND;
+        anlandOpt.backendRequestMode = AQ_BACKEND_REQUEST_MANDATORY;
+        effectiveBackends.push_back(anlandOpt);
+
+        // 其他后端作为 fallback
+        for (const auto& b : backends) {
+            if (b.backendType != AQ_BACKEND_ANLAND) {
+                SBackendImplementationOptions fallbackOpt = b;
+                fallbackOpt.backendRequestMode = AQ_BACKEND_REQUEST_FALLBACK;
+                effectiveBackends.push_back(fallbackOpt);
+            }
+        }
+    } else {
+        effectiveBackends = backends;
+    }
+#else
+    effectiveBackends = backends;
+#endif
+
+    /* ============================================================
+     * 创建后端实现
+     * ============================================================ */
+    for (auto const& b : effectiveBackends) {
         if (b.backendType == AQ_BACKEND_WAYLAND) {
             auto ref = SP<CWaylandBackend>(new CWaylandBackend(backend));
             backend->implementations.emplace_back(ref);
             ref->self = ref;
+            backend->log(AQ_LOG_DEBUG, "Created Wayland backend");
+
         } else if (b.backendType == AQ_BACKEND_DRM) {
             auto ref = CDRMBackend::attempt(backend);
             if (ref.empty()) {
                 backend->log(AQ_LOG_ERROR, "DRM Backend failed");
                 continue;
             }
-
             for (auto const& r : ref) {
                 backend->implementations.emplace_back(r);
+                backend->log(AQ_LOG_DEBUG, "Created DRM backend");
             }
+
         } else if (b.backendType == AQ_BACKEND_HEADLESS) {
             auto ref = SP<CHeadlessBackend>(new CHeadlessBackend(backend));
             backend->implementations.emplace_back(ref);
             ref->self = ref;
+            backend->log(AQ_LOG_DEBUG, "Created Headless backend");
+
         } else if (b.backendType == AQ_BACKEND_NULL) {
             auto ref = SP<CNullBackend>(new CNullBackend(backend));
             backend->implementations.emplace_back(ref);
             ref->self = ref;
+            backend->log(AQ_LOG_DEBUG, "Created Null backend");
+
+#ifdef HAS_ANLAND_BACKEND
+        } else if (b.backendType == AQ_BACKEND_ANLAND) {
+            // 避免重复创建
+            bool alreadyExists = false;
+            for (const auto& impl : backend->implementations) {
+                if (impl->type() == AQ_BACKEND_ANLAND) {
+                    alreadyExists = true;
+                    break;
+                }
+            }
+            if (!alreadyExists) {
+                const char* socketPath = getenv("ANLAND_SOCKET");
+                if (!socketPath || socketPath[0] == '\0') {
+                    socketPath = "/run/display.sock";
+                }
+                auto ref = SP<CAnlandBackend>(new CAnlandBackend(backend, socketPath));
+                backend->implementations.emplace_back(ref);
+                ref->self = ref;
+                backend->log(AQ_LOG_DEBUG, std::string("Created Anland backend, socket: ") + socketPath);
+            } else {
+                backend->log(AQ_LOG_DEBUG, "Anland backend already exists, skipping duplicate");
+            }
+#endif
+
         } else {
             backend->log(AQ_LOG_ERROR, std::format("Unknown backend id: {}", (int)b.backendType));
             continue;
         }
     }
 
-    // create a timerfd for idle events
-    backend->idle.fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
+    /* ============================================================
+     * 确保至少有一个后端（fallback 到 Headless）
+     * ============================================================ */
+    if (backend->implementations.empty()) {
+        backend->log(AQ_LOG_WARNING, "No backends available, adding Headless as fallback");
+        auto ref = SP<CHeadlessBackend>(new CHeadlessBackend(backend));
+        backend->implementations.emplace_back(ref);
+        ref->self = ref;
+    }
 
     return backend;
 }
 
-Aquamarine::CBackend::~CBackend() {
-    // Tear down implementations before the logger is destroyed,
-    // as backends may log during teardown (e.g. SDRMConnector::disconnect).
-    implementations.clear();
-}
+/* ============================================================
+ * CBackend::start() - 启动后端
+ * ============================================================ */
 
 bool Aquamarine::CBackend::start() {
     log(AQ_LOG_DEBUG, "Starting the Aquamarine backend!");
 
-    int  started = 0;
+    int started = 0;
 
     auto optionsForType = [this](eBackendType type) -> SBackendImplementationOptions {
         for (auto const& o : implementationOptions) {
@@ -128,53 +275,105 @@ bool Aquamarine::CBackend::start() {
         return SBackendImplementationOptions{};
     };
 
+    /* ============================================================
+     * 启动所有后端实现
+     * ============================================================ */
     for (size_t i = 0; i < implementations.size(); ++i) {
         const auto& impl = implementations.at(i);
+        log(AQ_LOG_DEBUG, std::format("Starting backend: {}", backendTypeToName(impl->type())));
         const bool ok = impl->start();
 
         if (!ok) {
-            log(AQ_LOG_ERROR, std::format("Requested backend ({}) could not start, enabling fallbacks", backendTypeToName(impl->type())));
+            log(AQ_LOG_ERROR,
+                std::format("Requested backend ({}) could not start, enabling fallbacks",
+                    backendTypeToName(impl->type())));
             if (optionsForType(impl->type()).backendRequestMode == AQ_BACKEND_REQUEST_MANDATORY) {
-                log(AQ_LOG_CRITICAL, std::format("Requested backend ({}) could not start and it's mandatory, cannot continue!", backendTypeToName(impl->type())));
+                log(AQ_LOG_CRITICAL,
+                    std::format("Requested backend ({}) could not start and it's mandatory, cannot continue!",
+                        backendTypeToName(impl->type())));
                 implementations.clear();
                 return false;
             }
-        } else
+        } else {
             started++;
-    }
-
-    if (implementations.empty() || started <= 0) {
-        log(AQ_LOG_CRITICAL, "No backend could be opened. Make sure there was a correct backend passed to CBackend, and that your environment supports at least one of them.");
-        return false;
-    }
-
-    // erase failed impls
-    std::erase_if(implementations, [this](const auto& i) {
-        bool failed = i->pollFDs().empty() && i->type() != AQ_BACKEND_NULL;
-        if (failed)
-            log(AQ_LOG_ERROR, std::format("Implementation {} failed, erasing.", backendTypeToName(i->type())));
-        return failed;
-    });
-
-    // TODO: obviously change this when (if) we add different allocators.
-    for (auto const& b : implementations) {
-        if (b->drmFD() >= 0) {
-            auto fd = reopenDRMNode(b->drmFD());
-            if (fd < 0) {
-                // this is critical, we cannot create an allocator properly
-                log(AQ_LOG_CRITICAL, "Failed to create an allocator (reopenDRMNode failed)");
-                return false;
-            }
-            primaryAllocator = CGBMAllocator::create(fd, self);
-            break;
         }
     }
 
-    if (!primaryAllocator && (implementations.empty() || implementations.at(0)->type() != AQ_BACKEND_NULL)) {
-        log(AQ_LOG_CRITICAL, "Cannot open backend: no allocator available");
+    /* ============================================================
+     * 检查是否有任何后端成功启动
+     * ============================================================ */
+    if (implementations.empty() || started <= 0) {
+        log(AQ_LOG_CRITICAL, "No backend could be opened.");
         return false;
     }
 
+    /* ============================================================
+     * 移除失败的实现
+     * ============================================================ */
+    std::erase_if(implementations, [this](const auto& i) {
+        bool failed = i->pollFDs().empty() && i->type() != AQ_BACKEND_NULL;
+        if (failed) {
+            log(AQ_LOG_ERROR, std::format("Implementation {} failed, erasing.", backendTypeToName(i->type())));
+        }
+        return failed;
+    });
+
+    /* ============================================================
+     * 创建 GBM 分配器
+     *
+     * Anland 后端使用消费者提供的 dmabuf，不需要 GBM 分配器。
+     * 只有非 Anland 后端才需要 GBM。
+     * ============================================================ */
+    bool hasAnland = hasAnlandImplementation(implementations);
+
+    if (!hasAnland) {
+        // 优先使用 DRM 后端创建 GBM 分配器
+        bool hasDRM = false;
+        for (auto const& b : implementations) {
+            if (b->drmFD() >= 0) {
+                hasDRM = true;
+                break;
+            }
+        }
+
+        if (hasDRM) {
+            for (auto const& b : implementations) {
+                if (b->drmFD() >= 0) {
+                    auto fd = reopenDRMNode(b->drmFD());
+                    if (fd < 0) {
+                        log(AQ_LOG_ERROR, "Failed to create an allocator (reopenDRMNode failed)");
+                    } else {
+                        primaryAllocator = CGBMAllocator::create(fd, self);
+                        if (primaryAllocator) {
+                            log(AQ_LOG_DEBUG, "GBM allocator created successfully");
+                        }
+                    }
+                    break;
+                }
+            }
+        } else {
+            log(AQ_LOG_DEBUG, "No DRM backend found, skipping GBM allocator creation");
+        }
+
+        /* 检查是否有非 DRM 后端（Headless/Null） */
+        bool hasNonDRMBackend = false;
+        for (auto const& b : implementations) {
+            if (b->type() == AQ_BACKEND_HEADLESS || b->type() == AQ_BACKEND_NULL) {
+                hasNonDRMBackend = true;
+                break;
+            }
+        }
+
+        if (!primaryAllocator && !hasNonDRMBackend) {
+            log(AQ_LOG_WARNING, "No allocator available, some features may not work");
+        }
+    } else {
+        log(AQ_LOG_DEBUG, "Anland backend detected, skipping GBM allocator creation");
+    }
+
+    /* ============================================================
+     * 标记就绪，通知各后端
+     * ============================================================ */
     ready = true;
     for (auto const& b : implementations) {
         b->onReady();
@@ -188,17 +387,27 @@ bool Aquamarine::CBackend::start() {
     return true;
 }
 
+/* ============================================================
+ * CBackend::log() - 日志输出
+ * ============================================================ */
+
 void Aquamarine::CBackend::log(eBackendLogLevel level, const std::string& msg) {
     if (logger)
         logger->log(level, msg);
 }
 
+/* ============================================================
+ * CBackend::getPollFDs() - 获取所有 poll FD
+ * ============================================================ */
+
 std::vector<Hyprutils::Memory::CSharedPointer<SPollFD>> Aquamarine::CBackend::getPollFDs() {
     std::vector<Hyprutils::Memory::CSharedPointer<SPollFD>> result;
+
     for (auto const& i : implementations) {
         auto pollfds = i->pollFDs();
         for (auto const& p : pollfds) {
-            log(AQ_LOG_DEBUG, std::format("backend: poll fd {} for implementation {}", p->fd, backendTypeToName(i->type())));
+            log(AQ_LOG_DEBUG, std::format("backend: poll fd {} for implementation {}",
+                p->fd, backendTypeToName(i->type())));
             result.emplace_back(p);
         }
     }
@@ -214,80 +423,106 @@ std::vector<Hyprutils::Memory::CSharedPointer<SPollFD>> Aquamarine::CBackend::ge
     return result;
 }
 
+/* ============================================================
+ * CBackend::drmFD() - 获取主 DRM FD
+ * ============================================================ */
+
 int Aquamarine::CBackend::drmFD() {
     for (auto const& i : implementations) {
         int fd = i->drmFD();
         if (fd < 0)
             continue;
-
         return fd;
     }
     return -1;
 }
+
+/* ============================================================
+ * CBackend::drmRenderNodeFD() - 获取主 DRM 渲染节点 FD
+ * ============================================================ */
 
 int Aquamarine::CBackend::drmRenderNodeFD() {
     for (auto const& i : implementations) {
         int fd = i->drmRenderNodeFD();
         if (fd < 0)
             continue;
-
         return fd;
     }
     return -1;
 }
 
+/* ============================================================
+ * CBackend::hasSession() - 是否有会话
+ * ============================================================ */
+
 bool Aquamarine::CBackend::hasSession() {
-    return session;
+    return !!session;
 }
+
+/* ============================================================
+ * CBackend::getPrimaryRenderFormats() - 获取主渲染格式
+ * ============================================================ */
 
 std::vector<SDRMFormat> Aquamarine::CBackend::getPrimaryRenderFormats() {
     for (auto const& b : implementations) {
         if (b->type() != AQ_BACKEND_DRM && b->type() != AQ_BACKEND_WAYLAND)
             continue;
-
         return b->getRenderFormats();
     }
-
     for (auto const& b : implementations) {
         return b->getRenderFormats();
     }
-
     return {};
 }
+
+/* ============================================================
+ * CBackend::getImplementations() - 获取所有后端实现
+ * ============================================================ */
 
 const std::vector<SP<IBackendImplementation>>& Aquamarine::CBackend::getImplementations() {
     return implementations;
 }
 
+/* ============================================================
+ * CBackend::addIdleEvent() / removeIdleEvent() - 空闲事件管理
+ * ============================================================ */
+
 void Aquamarine::CBackend::addIdleEvent(SP<std::function<void(void)>> fn) {
-    auto r = idle.pending.emplace_back(fn);
-
+    idle.pending.emplace_back(fn);
     updateIdleTimer();
-}
-
-void Aquamarine::CBackend::updateIdleTimer() {
-    uint64_t ADD_NS = idle.pending.empty() ? TIMESPEC_NSEC_PER_SEC * 240ULL /* 240s, 4 mins */ : 0;
-
-    timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    timespecAddNs(&now, ADD_NS);
-
-    itimerspec ts = {.it_value = now};
-
-    if (timerfd_settime(idle.fd, TFD_TIMER_ABSTIME, &ts, nullptr))
-        log(AQ_LOG_ERROR, std::format("backend: failed to arm timerfd: {}", strerror(errno)));
 }
 
 void Aquamarine::CBackend::removeIdleEvent(SP<std::function<void(void)>> pfn) {
     std::erase(idle.pending, pfn);
 }
 
+/* ============================================================
+ * CBackend::updateIdleTimer() - 更新空闲计时器
+ * ============================================================ */
+
+void Aquamarine::CBackend::updateIdleTimer() {
+    uint64_t ADD_NS = idle.pending.empty() ? TIMESPEC_NSEC_PER_SEC * 240ULL : 0;
+    timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    timespecAddNs(&now, ADD_NS);
+    itimerspec ts = {.it_value = now};
+    if (timerfd_settime(idle.fd, TFD_TIMER_ABSTIME, &ts, nullptr))
+        log(AQ_LOG_ERROR, std::format("backend: failed to arm timerfd: {}", strerror(errno)));
+}
+
+/* ============================================================
+ * CBackend::dispatchIdle() - 调度空闲事件
+ * ============================================================ */
+
 void Aquamarine::CBackend::dispatchIdle() {
-    if (!CFileDescriptor::isReadable(idle.fd))
-        log(AQ_LOG_ERROR, std::format("dispatchIdle: dispatched an non readable idle event on fd : {}", idle.fd));
-    else {
+    if (!CFileDescriptor::isReadable(idle.fd)) {
+        log(AQ_LOG_ERROR, std::format("dispatchIdle: dispatched a non-readable idle event on fd: {}", idle.fd));
+    } else {
         uint64_t expirations;
-        read(idle.fd, &expirations, sizeof(expirations));
+        ssize_t ret = read(idle.fd, &expirations, sizeof(expirations));
+        if (ret < 0) {
+            log(AQ_LOG_ERROR, std::format("dispatchIdle: read from timerfd failed: {}", strerror(errno)));
+        }
     }
 
     auto cpy = idle.pending;
@@ -301,11 +536,17 @@ void Aquamarine::CBackend::dispatchIdle() {
     updateIdleTimer();
 }
 
-void Aquamarine::CBackend::onNewGpu(std::string path) {
-    const auto primary    = std::ranges::find_if(implementations, [](SP<IBackendImplementation> value) { return value->type() == Aquamarine::AQ_BACKEND_DRM; });
-    const auto primaryDrm = primary != implementations.end() ? ((Aquamarine::CDRMBackend*)(*primary).get())->self.lock() : nullptr;
+/* ============================================================
+ * CBackend::onNewGpu() - 热插拔新 GPU
+ * ============================================================ */
 
-    auto       ref = CDRMBackend::fromGpu(path, self.lock(), primaryDrm);
+void Aquamarine::CBackend::onNewGpu(std::string path) {
+    const auto primary = std::ranges::find_if(implementations,
+        [](SP<IBackendImplementation> value) { return value->type() == Aquamarine::AQ_BACKEND_DRM; });
+    const auto primaryDrm = primary != implementations.end() ?
+        ((Aquamarine::CDRMBackend*)(*primary).get())->self.lock() : nullptr;
+
+    auto ref = CDRMBackend::fromGpu(path, self.lock(), primaryDrm);
     if (!ref) {
         log(AQ_LOG_ERROR, std::format("DRM Backend failed for device {}", path));
         return;
@@ -317,19 +558,20 @@ void Aquamarine::CBackend::onNewGpu(std::string path) {
 
     implementations.emplace_back(ref);
     events.pollFDsChanged.emit();
-
-    ref->onReady();        // Renderer created here
-    ref->recheckOutputs(); // Now we can recheck outputs
+    ref->onReady();
+    ref->recheckOutputs();
 }
 
-// Yoinked from wlroots, render/allocator/allocator.c
-// Ref-counting reasons, see https://gitlab.freedesktop.org/mesa/drm/-/merge_requests/110
-int Aquamarine::CBackend::reopenDRMNode(int drmFD, bool allowRenderNode) {
+/* ============================================================
+ * CBackend::reopenDRMNode() - 重新打开 DRM 节点
+ *
+ * 从 wlroots 移植，用于分配器引用计数
+ * ============================================================ */
 
+int Aquamarine::CBackend::reopenDRMNode(int drmFD, bool allowRenderNode) {
     if (drmIsMaster(drmFD)) {
-        // Only recent kernels support empty leases
         uint32_t lesseeID = 0;
-        int      leaseFD  = drmModeCreateLease(drmFD, nullptr, 0, O_CLOEXEC, &lesseeID);
+        int leaseFD = drmModeCreateLease(drmFD, nullptr, 0, O_CLOEXEC, &lesseeID);
         if (leaseFD >= 0) {
             return leaseFD;
         } else if (leaseFD != -EINVAL && leaseFD != -EOPNOTSUPP) {
@@ -344,9 +586,7 @@ int Aquamarine::CBackend::reopenDRMNode(int drmFD, bool allowRenderNode) {
         name = drmGetRenderDeviceNameFromFd(drmFD);
 
     if (!name) {
-        // primary node or no name
         name = drmGetDeviceNameFromFd2(drmFD);
-
         if (!name) {
             log(AQ_LOG_ERROR, "reopenDRMNode: drmGetDeviceNameFromFd2 failed");
             return -1;
@@ -364,7 +604,6 @@ int Aquamarine::CBackend::reopenDRMNode(int drmFD, bool allowRenderNode) {
 
     free(name);
 
-    // We need to authenticate if we are using a DRM primary node and are the master
     if (drmIsMaster(drmFD) && drmGetNodeTypeFromFd(newFD) == DRM_NODE_PRIMARY) {
         drm_magic_t magic;
         if (int ret = drmGetMagic(newFD, &magic); ret < 0) {
@@ -372,7 +611,6 @@ int Aquamarine::CBackend::reopenDRMNode(int drmFD, bool allowRenderNode) {
             close(newFD);
             return -1;
         }
-
         if (int ret = drmAuthMagic(drmFD, magic); ret < 0) {
             log(AQ_LOG_ERROR, std::format("reopenDRMNode: drmAuthMagic failed: {}", strerror(-ret)));
             close(newFD);
@@ -382,6 +620,10 @@ int Aquamarine::CBackend::reopenDRMNode(int drmFD, bool allowRenderNode) {
 
     return newFD;
 }
+
+/* ============================================================
+ * IBackendImplementation::getRenderableFormats() - 默认实现
+ * ============================================================ */
 
 std::vector<SDRMFormat> Aquamarine::IBackendImplementation::getRenderableFormats() {
     return {};
