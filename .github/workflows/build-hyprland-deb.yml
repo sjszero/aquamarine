@@ -57,6 +57,7 @@ jobs:
       # ==========================================================
       - name: Generate APT package list hash
         id: apt-hash
+        shell: bash
         run: |
           cat > /tmp/apt-packages.txt << 'EOF'
           devscripts build-essential fakeroot dpkg-dev quilt debhelper-compat
@@ -99,7 +100,7 @@ jobs:
             || echo "Some backports packages may already be installed"
 
       # ==========================================================
-      # 6. 检出仓库（获取补丁，直接检出到当前目录）
+      # 6. 检出仓库（获取补丁）
       # ==========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -107,9 +108,11 @@ jobs:
           fetch-depth: 1
 
       # ==========================================================
-      # 7. 验证补丁文件存在
+      # 7. 验证补丁文件
       # ==========================================================
       - name: Verify patch file
+        id: patch-hash
+        shell: bash
         run: |
           echo "Current directory: $(pwd)"
           echo "Files in current directory:"
@@ -122,7 +125,6 @@ jobs:
             echo "⚠️ Patch file not found: ./${{ env.HYPR_PATCH }}"
             echo "hypr_patch_hash=no-patch" >> $GITHUB_OUTPUT
           fi
-        id: patch-hash
 
       # ==========================================================
       # 第一部分：构建 Aquamarine
@@ -147,16 +149,16 @@ jobs:
 
       - name: Find Aqua source dir
         id: aqua-src-dir
+        shell: bash
         run: |
           SRCDIR=$(find . -maxdepth 1 -type d -name "${{ env.AQUA_SRC }}-*" | head -1)
           echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
 
-      # ---------- 10. 修改 Aquamarine changelog（只在未缓存时执行） ----------
+      # ---------- 10. 修改 Aquamarine changelog ----------
       - name: Bump Aquamarine changelog
         if: steps.aqua-src-cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.aqua-src-dir.outputs.srcdir }}
-          # 检查是否已经添加过 +anland1 后缀
           if ! grep -q "+anland1" debian/changelog; then
             VER=$(dpkg-parsechangelog --show-field Version)
             NEW_VER="${VER}+anland1"
@@ -207,6 +209,7 @@ jobs:
 
       - name: Find Hyprland source dir
         id: hypr-src-dir
+        shell: bash
         run: |
           SRCDIR=$(find . -maxdepth 1 -type d -name "${{ env.HYPR_SRC }}-*" | head -1)
           echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
@@ -226,12 +229,11 @@ jobs:
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
 
-      # ---------- 17. 修改 Hyprland changelog（只在未缓存时执行，避免重复后缀） ----------
+      # ---------- 17. 修改 Hyprland changelog ----------
       - name: Bump Hyprland changelog
         if: steps.hypr-src-cache.outputs.cache-hit != 'true'
         run: |
           cd ${{ steps.hypr-src-dir.outputs.srcdir }}
-          # 检查是否已经添加过 +anland1 后缀
           if ! grep -q "+anland1" debian/changelog; then
             VER=$(dpkg-parsechangelog --show-field Version)
             NEW_VER="${VER}+anland1"
@@ -265,6 +267,7 @@ jobs:
       # 20. 过滤并收集需要的 .deb 文件
       # ==========================================================
       - name: Collect filtered artifacts
+        shell: bash
         run: |
           mkdir -p artifacts
 
