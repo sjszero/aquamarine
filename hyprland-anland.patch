@@ -458,7 +458,7 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
  #include "../helpers/math/Math.hpp"
  #include <algorithm>
  #include <aquamarine/output/Output.hpp>
-@@ -483,34 +485,98 @@
+@@ -483,34 +485,102 @@
          return beginFullFakeRenderInternal(pMonitor, damage, fb, simple);
  
      int bufferAge = 0;
@@ -472,6 +472,10 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
 -    } else
 +        // ---- Anland: 虚拟显示 - 从后端获取当前 buffer ----
 +        if (pMonitor->m_isVirtualDisplay) {
++            // 确保GL上下文当前
++            if (g_pHyprOpenGL) {
++                g_pHyprOpenGL->makeEGLCurrent();
++            }
 +            auto backend = pMonitor->m_output->getBackend();
 +            if (backend && backend->type() == Aquamarine::AQ_BACKEND_ANLAND) {
 +                auto anlandBackend = dynamic_cast<Aquamarine::CAnlandBackend*>(backend.get());

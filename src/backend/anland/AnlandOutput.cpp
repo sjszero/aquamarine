@@ -200,72 +200,40 @@ bool CAnlandOutput::importBuffer(int index) {
 
     auto* slot = &m_slots[index];
     if (slot->imported && !slot->failed) return true;
-    if (slot->failed) {
-        ANLAND_LOG("importBuffer: slot %d previously failed", index);
-        return false;
-    }
+    if (slot->failed) return false;
 
-    if (!ensureEGLInitialized()) {
-        slot->failed = true;
-        return false;
-    }
-
+    // 必须有当前GL上下文（由Hyprland保证）
     EGLContext currentCtx = eglGetCurrentContext();
-    EGLContext tempCtx = EGL_NO_CONTEXT;
-    bool needRestore = false;
-
     if (currentCtx == EGL_NO_CONTEXT) {
-        ANLAND_LOG("importBuffer: no GL context, creating temporary");
-        EGLint ctxAttribs[] = {
-            EGL_CONTEXT_MAJOR_VERSION, 3,
-            EGL_CONTEXT_MINOR_VERSION, 0,
-            EGL_NONE
-        };
-        tempCtx = eglCreateContext(g_eglDisplay, EGL_NO_CONFIG_KHR, EGL_NO_CONTEXT, ctxAttribs);
-        if (tempCtx == EGL_NO_CONTEXT) {
-            ANLAND_ERR("importBuffer: eglCreateContext failed");
-            slot->failed = true;
-            return false;
-        }
-        if (!eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, tempCtx)) {
-            ANLAND_ERR("importBuffer: eglMakeCurrent failed");
-            eglDestroyContext(g_eglDisplay, tempCtx);
-            slot->failed = true;
-            return false;
-        }
-        needRestore = true;
+        ANLAND_ERR("importBuffer: no GL context, cannot import");
+        slot->failed = true;
+        return false;
     }
-
-    auto* dpy = display();
-    if (!dpy || is_fallback(dpy)) {
-        ANLAND_LOG("importBuffer: display not ready");
-        if (needRestore) {
-            eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-            eglDestroyContext(g_eglDisplay, tempCtx);
-        }
+    EGLDisplay dpy = eglGetCurrentDisplay();
+    if (dpy == EGL_NO_DISPLAY) {
+        ANLAND_ERR("importBuffer: no EGLDisplay");
         slot->failed = true;
         return false;
     }
 
-    int fd = get_dmabuf_fd_at(dpy, index);
+    auto* dpy_ctx = display();
+    if (!dpy_ctx || is_fallback(dpy_ctx)) {
+        ANLAND_ERR("importBuffer: display not ready");
+        slot->failed = true;
+        return false;
+    }
+
+    int fd = get_dmabuf_fd_at(dpy_ctx, index);
     if (fd < 0) {
         ANLAND_ERR("importBuffer: get_dmabuf_fd_at failed for %d", index);
-        if (needRestore) {
-            eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-            eglDestroyContext(g_eglDisplay, tempCtx);
-        }
         slot->failed = true;
         return false;
     }
 
     buf_info info;
-    if (get_dmabuf_info_at(dpy, index, &info) < 0) {
+    if (get_dmabuf_info_at(dpy_ctx, index, &info) < 0) {
         ANLAND_ERR("importBuffer: get_dmabuf_info_at failed for %d", index);
         close(fd);
-        if (needRestore) {
-            eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-            eglDestroyContext(g_eglDisplay, tempCtx);
-        }
         slot->failed = true;
         return false;
     }
@@ -320,14 +288,25 @@ bool CAnlandOutput::importBuffer(int index) {
     attribs[idx++] = EGL_TRUE;
     attribs[idx++] = EGL_NONE;
 
-    slot->eglImage = g_eglCreateImageKHR(g_eglDisplay, EGL_NO_CONTEXT,
-                                          EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
+    // 使用当前EGLDisplay创建EGLImage
+    PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    if (!eglCreateImageKHR) {
+        ANLAND_ERR("importBuffer: eglCreateImageKHR not available");
+        slot->failed = true;
+        return false;
+    }
+    slot->eglImage = eglCreateImageKHR(dpy, EGL_NO_CONTEXT, EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
     if (slot->eglImage == EGL_NO_IMAGE_KHR) {
         ANLAND_ERR("importBuffer: eglCreateImageKHR failed, error=0x%x", eglGetError());
-        if (needRestore) {
-            eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-            eglDestroyContext(g_eglDisplay, tempCtx);
-        }
+        slot->failed = true;
+        return false;
+    }
+
+    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+    if (!glEGLImageTargetTexture2DOES) {
+        ANLAND_ERR("importBuffer: glEGLImageTargetTexture2DOES not available");
+        eglDestroyImageKHR(dpy, slot->eglImage);
+        slot->eglImage = EGL_NO_IMAGE_KHR;
         slot->failed = true;
         return false;
     }
@@ -339,7 +318,7 @@ bool CAnlandOutput::importBuffer(int index) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    g_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, slot->eglImage);
+    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, slot->eglImage);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     glGenFramebuffers(1, &slot->framebuffer);
@@ -356,19 +335,13 @@ bool CAnlandOutput::importBuffer(int index) {
     }
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    slot->buffer = CSharedPointer<CAnlandBuffer>(new CAnlandBuffer(dpy, index, m_backend));
+    slot->buffer = CSharedPointer<CAnlandBuffer>(new CAnlandBuffer(dpy_ctx, index, m_backend));
     slot->imported = true;
     slot->hasDamage = true;
     slot->inUse = false;
     slot->displayed = false;
     slot->rendered = false;
     slot->failed = false;
-
-    if (needRestore) {
-        eglMakeCurrent(g_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
-        eglDestroyContext(g_eglDisplay, tempCtx);
-        ANLAND_LOG("importBuffer: restored GL context");
-    }
 
     ANLAND_LOG("importBuffer: slot %d imported successfully", index);
     return true;
@@ -455,9 +428,7 @@ bool CAnlandOutput::beginRender() {
         return false;
     }
 
-    if (!ensureEGLInitialized()) {
-        return false;
-    }
+    // 不再需要ensureEGLInitialized，上下文由调用者设置
 
     std::lock_guard<std::mutex> lock(m_bufferMutex);
 
