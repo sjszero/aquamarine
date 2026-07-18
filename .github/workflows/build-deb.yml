@@ -37,6 +37,8 @@ env:
   DEBIAN_FRONTEND: noninteractive
   HYPR_SRC: hyprland
   HYPR_PATCH: hyprland-anland.patch
+  # 设置 PKG_CONFIG_PATH 让 pkg-config 能找到 backports 的包
+  PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig
 
 jobs:
   build:
@@ -126,7 +128,7 @@ jobs:
             apt-all-${{ runner.arch }}-
 
       # ==========================================================
-      # 4. 安装所有依赖（从 backports 获取较新版本）
+      # 4. 安装所有依赖
       # ==========================================================
       - name: Install all dependencies
         run: |
@@ -163,6 +165,9 @@ jobs:
             libhyprcursor-dev libhyprgraphics-dev \
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "Some backports packages may already be installed"
+          
+          # 更新 pkg-config 路径
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig" >> $GITHUB_ENV
 
       # ==========================================================
       # 6. 构建 hyprwayland-scanner（Aquamarine 依赖）
@@ -191,7 +196,6 @@ jobs:
         run: |
           export PATH=/usr/local/bin:$PATH
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
-          hyprwayland-scanner --version 2>/dev/null || true
 
       # ==========================================================
       # 7. 检出仓库（获取补丁）
@@ -278,6 +282,8 @@ jobs:
         run: |
           cd aquamarine
           mkdir -p build && cd build
+          # 设置 pkg-config 路径让 CMake 能找到 backports 的包
+          export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig"
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
