@@ -140,11 +140,16 @@ jobs:
             libdisplay-info-dev libdisplay-info3 \
             || echo "Failed to install libdisplay-info from sid"
 
+      # ==========================================================
+      # 构建 hyprwayland-scanner（包含 CMake 配置文件）
+      # ==========================================================
       - name: Cache hyprwayland-scanner
         id: scanner-cache
         uses: actions/cache@v4
         with:
-          path: /usr/local/bin/hyprwayland-scanner
+          path: |
+            /usr/local/bin/hyprwayland-scanner
+            /usr/local/lib/cmake/hyprwayland-scanner
           key: scanner-${{ runner.arch }}
 
       - name: Build hyprwayland-scanner
@@ -156,14 +161,22 @@ jobs:
           cd hyprwayland-scanner
           mkdir -p build && cd build
           cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr/local
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_INSTALL_LIBDIR=lib
           make -j$(nproc)
           make install
+          # 确保 CMake 配置文件被安装
+          ls -la /usr/local/lib/cmake/hyprwayland-scanner/ 2>/dev/null || echo "Config files not found"
 
       - name: Verify hyprwayland-scanner
         run: |
           export PATH=/usr/local/bin:$PATH
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
+          # 设置 CMAKE_PREFIX_PATH 让 CMake 能找到 hyprwayland-scanner
+          echo "CMAKE_PREFIX_PATH=/usr/local:/usr" >> $GITHUB_ENV
+          hyprwayland-scanner --version 2>/dev/null || true
+          # 检查 CMake 配置文件
+          ls -la /usr/local/lib/cmake/hyprwayland-scanner/ 2>/dev/null || echo "Config files not found"
 
       - name: Checkout repository (for hyprland patch)
         uses: actions/checkout@v4
@@ -241,6 +254,8 @@ jobs:
           mkdir -p build && cd build
           PC_PATHS=$(find /usr -name "*.pc" -exec dirname {} \; 2>/dev/null | sort -u | tr '\n' ':')
           export PKG_CONFIG_PATH="${PC_PATHS}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
+          # 设置 CMAKE_PREFIX_PATH 让 CMake 能找到 hyprwayland-scanner
+          export CMAKE_PREFIX_PATH="/usr/local:/usr"
           cmake .. -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
@@ -416,18 +431,9 @@ jobs:
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
           ldconfig
-          # 使用 dpkg-buildpackage 构建，-d 跳过依赖检查
-          # 同时设置环境变量让 dpkg-shlibdeps 能找到库
           export DPKG_SHLIBDEPS_OPTIONS="-l/usr/lib/aarch64-linux-gnu:/usr/lib:/lib/aarch64-linux-gnu"
-          dpkg-buildpackage -b -uc -us -d -j$(nproc) || {
-            echo "First attempt failed, trying with nocheck..."
-            export DEB_BUILD_OPTIONS="nocheck"
-            dpkg-buildpackage -b -uc -us -d -j$(nproc) || {
-              echo "Final attempt: building with skip-shlibdeps..."
-              # 直接使用 debuild 并跳过 shlibdeps
-              debuild -b -uc -us -d -- --no-check-builddeps || true
-            }
-          }
+          # 使用 -d 跳过依赖检查，-j$(nproc) 并行构建
+          dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
       # ==========================================================
       # 收集 artifacts
