@@ -127,7 +127,7 @@ jobs:
             apt-all-${{ runner.arch }}-
 
       # ==========================================================
-      # 4. 安装所有依赖（不使用 sid）
+      # 4. 安装所有依赖
       # ==========================================================
       - name: Install all dependencies
         run: |
@@ -152,7 +152,7 @@ jobs:
             hwdata
 
       # ==========================================================
-      # 5. 从 backports 安装较新的依赖
+      # 5. 从 backports 安装较新的依赖（不包含 aquamarine）
       # ==========================================================
       - name: Install backports dependencies
         run: |
@@ -226,6 +226,8 @@ jobs:
           echo "🧹 Cleaning caches as requested..."
           rm -rf /tmp/aqua-install /tmp/hypr-install
           rm -rf aquamarine*/ hyprland*/
+          # 移除可能冲突的 Aquamarine 包
+          dpkg -r libaquamarine10 2>/dev/null || true
           apt-get clean
           rm -rf /var/lib/apt/lists/*
           apt-get update
@@ -326,8 +328,11 @@ jobs:
       - name: Install Aquamarine .deb
         if: inputs.skip_aquamarine != true
         run: |
-          # 先确保运行时依赖已安装
-          apt-get install -y --no-install-recommends libdisplay-info3 || true
+          # 如果存在旧的 Aquamarine 包，先移除
+          dpkg -r libaquamarine10 2>/dev/null || true
+          dpkg -r libaquamarine11 2>/dev/null || true
+          # 确保运行时依赖已安装
+          apt-get install -y -t trixie-backports --no-install-recommends libdisplay-info3 || true
           if [ -f /libaquamarine10_*.deb ]; then
             dpkg -i /libaquamarine10_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine10_*.deb
@@ -406,9 +411,11 @@ jobs:
         if: inputs.skip_hyprland != true
         run: |
           cd ./${{ env.HYPR_SRC }}-*/
-          # 先移除可能冲突的 sid 包（如果存在）
-          apt-get remove -y libaquamarine-dev libaquamarine11 2>/dev/null || true
-          # 正常安装 build-dep
+          # 先确保我们自己构建的 Aquamarine 不会被覆盖
+          apt-get install -y --no-install-recommends \
+            libdisplay-info3 libhyprutils-dev libhyprlang-dev \
+            libhyprcursor-dev libhyprgraphics-dev libinput-dev \
+            libxkbcommon-dev wayland-protocols || true
           apt-get build-dep -y ./ || {
             echo "build-dep failed, trying with backports..."
             apt-get install -y -t trixie-backports --no-install-recommends \
