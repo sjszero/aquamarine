@@ -46,6 +46,8 @@ jobs:
           deb-src http://deb.debian.org/debian-security trixie-security main
           deb-src http://deb.debian.org/debian trixie-backports main
           EOF
+          # 删除可能存在的重复源文件
+          rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
           apt-get update
 
       # ==========================================================
@@ -132,6 +134,7 @@ jobs:
         run: |
           SRCDIR=$(find . -maxdepth 1 -type d -name "${{ env.AQUA_SRC }}-*" | head -1)
           echo "srcdir=${SRCDIR}" >> $GITHUB_OUTPUT
+          echo "srcdir=${SRCDIR}"
 
       # ---------- 9. 修改 Aquamarine changelog ----------
       - name: Bump Aquamarine changelog
@@ -155,11 +158,14 @@ jobs:
           cd ${{ steps.aqua-src-dir.outputs.srcdir }}
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
-      # ---------- 12. 安装 Aquamarine .deb ----------
+      # ---------- 12. 安装 Aquamarine .deb（修正：使用 libaquamarine* 匹配） ----------
       - name: Install Aquamarine .deb
         run: |
-          dpkg -i ./${{ env.AQUA_SRC }}_*.deb || apt-get install -f -y
-          dpkg -i ./${{ env.AQUA_SRC }}_*.deb
+          # Aquamarine 生成的包名是 libaquamarine10 和 libaquamarine-dev
+          # 使用通配符匹配所有 aquamarine 相关的 .deb
+          ls -la ./*aquamarine*.deb 2>/dev/null || echo "No aquamarine debs found"
+          dpkg -i ./*aquamarine*.deb || apt-get install -f -y
+          dpkg -i ./*aquamarine*.deb
 
       # ==========================================================
       # 第二部分：构建 Hyprland（打 Anland 补丁）
@@ -252,11 +258,11 @@ jobs:
           echo "| Hyprland Source | ${{ steps.hypr-src-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo "- Aquamarine: \`aquamarine_*+anland1_arm64.deb\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Aquamarine: \`libaquamarine*_*+anland1_arm64.deb\`" >> $GITHUB_STEP_SUMMARY
           echo "- Hyprland: \`hyprland_*+anland1_arm64.deb\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### Install" >> $GITHUB_STEP_SUMMARY
           echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "sudo dpkg -i aquamarine_*.deb hyprland_*.deb" >> $GITHUB_STEP_SUMMARY
+          echo "sudo dpkg -i libaquamarine*.deb hyprland*.deb" >> $GITHUB_STEP_SUMMARY
           echo "sudo apt-get install -f -y" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
