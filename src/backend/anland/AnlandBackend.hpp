@@ -22,18 +22,6 @@ class CAnlandPointer;
 class CAnlandKeyboard;
 class CAnlandTouch;
 
-/**
- * AnlandBackend - Android display backend for Aquamarine
- *
- * Communicates with Android's display_daemon via UNIX socket,
- * receives pre-allocated dmabufs, input events, audio and camera streams.
- *
- * Design principles:
- * - Zero-copy rendering: renders directly into consumer-provided dmabufs
- * - Hot-plug support: fallback/reconnect state machine
- * - EGL context sharing: reuses Hyprland's EGL context
- * - Per-buffer damage tracking: efficient partial updates
- */
 class CAnlandBackend : public IBackendImplementation {
 public:
     CAnlandBackend(Hyprutils::Memory::CSharedPointer<CBackend> backend,
@@ -56,13 +44,13 @@ public:
     virtual std::vector<Hyprutils::Memory::CSharedPointer<IAllocator>> getAllocators() override { return {}; }
     virtual Hyprutils::Memory::CWeakPointer<IBackendImplementation> getPrimary() override { return self; }
 
-    // 状态查询
+    // 公共访问器（修复编译错误）
+    Hyprutils::Memory::CSharedPointer<CBackend> getBackend() const { return m_backend; }
     display_ctx* display() { return m_display; }
     Hyprutils::Memory::CSharedPointer<CAnlandOutput> getOutput() const { return m_output; }
     bool isConnected() const { return m_display != nullptr && !m_inFallback; }
     bool isFallback() const { return m_inFallback; }
 
-    // 生命周期
     void onFallback();
     void onOutputChanged();
     void shutdown();
@@ -70,21 +58,14 @@ public:
     Hyprutils::Memory::CWeakPointer<CAnlandBackend> self;
 
 private:
-    // 重连机制
     void setupReconnectTimer();
     void teardownReconnectTimer();
     void onReconnectTimerFd();
     bool tryConnect();
-
-    // 输出管理
     void createOutputIfNeeded();
     void emitOutputIfReady();
-
-    // 输入事件处理
     void handleInputEvent(const InputEvent& ev);
     void handleResourceEvent(const InputEvent& ev);
-
-    // 音频/摄像头
     void updateAudioFd();
     void updateCameraResources();
 

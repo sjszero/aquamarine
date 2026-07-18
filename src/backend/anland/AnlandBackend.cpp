@@ -48,11 +48,9 @@ bool CAnlandBackend::start() {
     m_running = true;
     m_inFallback = true;
 
-    // 启动音频和摄像头引擎（始终运行，即使没有消费者）
     anland_audio_start();
     anland_camera_start();
 
-    // 尝试首次连接
     if (!tryConnect()) {
         ANLAND_LOG("no consumer yet, starting in fallback mode");
         setupReconnectTimer();
@@ -60,9 +58,7 @@ bool CAnlandBackend::start() {
         ANLAND_LOG("connected successfully");
     }
 
-    // 创建输出（即使 fallback 也创建，用于接收状态）
     createOutputIfNeeded();
-
     return true;
 }
 
@@ -89,14 +85,12 @@ bool CAnlandBackend::tryConnect() {
         ANLAND_LOG("connected to daemon: %dx%d @ %d mHz", width, height, refresh);
     }
 
-    // 尝试退出 fallback（最多尝试 100 次，每次 100ms）
     for (int attempt = 0; attempt < 100; attempt++) {
         if (m_destroying) return false;
         if (try_exit_fallback(m_display) == 0) {
             m_inFallback = false;
             ANLAND_LOG("consumer connected, exiting fallback (attempt %d)", attempt);
 
-            // 更新音频和摄像头
             updateAudioFd();
             updateCameraResources();
 
@@ -107,7 +101,6 @@ bool CAnlandBackend::tryConnect() {
                 if (count > 0) {
                     m_output->importBuffers(count);
                 }
-                // 触发一次帧渲染
                 m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_CONNECTOR);
             }
 
@@ -140,7 +133,6 @@ void CAnlandBackend::onFallback() {
     m_outputEmitted = false;
     ANLAND_LOG("entered fallback (consumer disconnected)");
 
-    // 断开音频和摄像头
     anland_audio_set_fd(-1);
     anland_camera_clear();
 
@@ -149,7 +141,6 @@ void CAnlandBackend::onFallback() {
         m_output->releaseBuffers();
     }
 
-    // 启动重连定时器
     setupReconnectTimer();
     m_backend->events.pollFDsChanged.emit();
 }
@@ -160,7 +151,6 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
 
     auto weakSelf = CWeakPointer<CAnlandBackend>(this->self.lock());
 
-    // 重连定时器 FD
     if (m_reconnectTimerFd < 0 && m_inFallback) setupReconnectTimer();
     if (m_reconnectTimerFd >= 0) {
         auto pfd = makeShared<SPollFD>();
@@ -172,7 +162,6 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
         result.push_back(pfd);
     }
 
-    // 数据通道 FD（输入事件）
     if (m_display && !m_inFallback) {
         int dataFd = get_data_fd(m_display);
         int bufFd = get_buffer_ready_fd(m_display);
@@ -188,7 +177,6 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
             result.push_back(pfd);
         }
 
-        // Buffer ready FD（帧完成信号）
         if (bufFd >= 0) {
             auto pfd = makeShared<SPollFD>();
             pfd->fd = bufFd;
@@ -207,7 +195,8 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
 void CAnlandBackend::onReconnectTimerFd() {
     if (m_reconnectTimerFd < 0 || m_destroying) return;
     uint64_t expirations;
-    read(m_reconnectTimerFd, &expirations, sizeof(expirations));
+    ssize_t ret = read(m_reconnectTimerFd, &expirations, sizeof(expirations));
+    (void)ret;  // 修复 unused result 警告
 
     if (m_inFallback && tryConnect()) {
         m_backend->events.pollFDsChanged.emit();
@@ -230,7 +219,7 @@ void CAnlandBackend::setupReconnectTimer() {
     }
 
     struct itimerspec ts = {
-        .it_interval = { .tv_sec = 0, .tv_nsec = 100000000 },  // 100ms
+        .it_interval = { .tv_sec = 0, .tv_nsec = 100000000 },
         .it_value = { .tv_sec = 0, .tv_nsec = 100000000 }
     };
     timerfd_settime(m_reconnectTimerFd, 0, &ts, nullptr);
@@ -369,7 +358,6 @@ void CAnlandBackend::handleInputEvent(const InputEvent& ev) {
 }
 
 void CAnlandBackend::handleResourceEvent(const InputEvent& ev) {
-    // 处理摄像头等资源
     if (ev.resource.type == SERVICE_TYPE_CAMERA) {
         int fds[8];
         int fd_count = 0;

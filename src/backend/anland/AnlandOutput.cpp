@@ -151,11 +151,17 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     m_height = height;
     m_refresh = refresh > 0 ? refresh : 60000;
 
-    this->physicalSize = Hyprutils::Math::Vector2D(width / 96.0f, height / 96.0f);
+    this->physicalSize = Hyprutils::Math::Vector2D(
+        static_cast<float>(width) / 96.0f,
+        static_cast<float>(height) / 96.0f
+    );
 
     auto mode = CSharedPointer<SOutputMode>(
         new SOutputMode{
-            .pixelSize = Hyprutils::Math::Vector2D(static_cast<float>(width), static_cast<float>(height)),
+            .pixelSize = Hyprutils::Math::Vector2D(
+                static_cast<float>(width),
+                static_cast<float>(height)
+            ),
             .refreshRate = m_refresh,
             .preferred = true,
         });
@@ -704,7 +710,7 @@ void CAnlandOutput::scheduleFrame(scheduleFrameReason reason) {
         });
     }
 
-    auto backend = m_backend ? m_backend->backend() : nullptr;
+    auto backend = m_backend ? m_backend->getBackend() : nullptr;
     if (backend) {
         backend->addIdleEvent(m_frameIdle);
     } else {
@@ -778,7 +784,7 @@ void CAnlandOutput::enterFallback() {
     this->state->setEnabled(false);
 
     if (m_frameIdle) {
-        auto backend = m_backend ? m_backend->backend() : nullptr;
+        auto backend = m_backend ? m_backend->getBackend() : nullptr;
         if (backend) {
             backend->removeIdleEvent(m_frameIdle);
         }
