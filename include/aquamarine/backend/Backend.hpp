@@ -1,4 +1,4 @@
-// src/backend/Backend.hpp
+// include/aquamarine/backend/Backend.hpp
 #pragma once
 
 #include <hyprutils/memory/SharedPtr.hpp>
@@ -32,9 +32,7 @@ namespace Aquamarine {
         AQ_BACKEND_DRM,
         AQ_BACKEND_HEADLESS,
         AQ_BACKEND_NULL,
-#ifdef HAS_ANLAND_BACKEND
         AQ_BACKEND_ANLAND,      // Anland (Android display) backend
-#endif
     };
 
     /**
@@ -251,8 +249,6 @@ namespace Aquamarine {
         } m_sEventLoopInternals;
 
         friend class CDRMBackend;
-#ifdef HAS_ANLAND_BACKEND
         friend class CAnlandBackend;
-#endif
     };
 };
