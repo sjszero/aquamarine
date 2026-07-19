@@ -96,6 +96,11 @@ bool CAnlandBackend::start() {
     anland_audio_start();
     anland_camera_start();
 
+    // 关键修复：先创建输出，再尝试连接
+    // 这样 Hyprland 在连接完成时输出已经存在
+    createOutputIfNeeded();
+    emitOutputIfReady();
+
     if (!tryConnect()) {
         ANLAND_LOG("no consumer yet, starting in fallback mode");
         setupReconnectTimer();
@@ -103,15 +108,19 @@ bool CAnlandBackend::start() {
         ANLAND_LOG("connected successfully");
     }
 
-    createOutputIfNeeded();
     return true;
 }
 
 bool CAnlandBackend::tryConnect() {
-    if (m_destroying) return false;
+    ANLAND_TRACE("CAnlandBackend::tryConnect START");
+    if (m_destroying) {
+        ANLAND_TRACE("tryConnect: destroying, returning false");
+        return false;
+    }
     std::lock_guard<std::mutex> lock(m_connectMutex);
 
     if (!m_display) {
+        ANLAND_TRACE("tryConnect: connecting to daemon");
         display_ctx* display = nullptr;
         if (connect_to_deamon(&display, m_socketPath.c_str()) < 0 || !display) {
             ANLAND_LOG("connect_to_daemon failed");
@@ -130,37 +139,62 @@ bool CAnlandBackend::tryConnect() {
         ANLAND_LOG("connected to daemon: %dx%d @ %d mHz", width, height, refresh);
     }
 
+    // 确保输出已创建
+    createOutputIfNeeded();
+
     for (int attempt = 0; attempt < 100; attempt++) {
-        if (m_destroying) return false;
+        ANLAND_TRACE("tryConnect: attempt %d", attempt);
+        if (m_destroying) {
+            ANLAND_TRACE("tryConnect: destroying, returning false");
+            return false;
+        }
         if (try_exit_fallback(m_display) == 0) {
             m_inFallback = false;
             ANLAND_LOG("consumer connected, exiting fallback (attempt %d)", attempt);
 
-            // 创建分配器 - 从 Android 获取 dmabuf
+            ANLAND_TRACE("tryConnect: creating allocator");
             m_allocator = CAnlandAllocator::create(m_display, this);
             if (!m_allocator) {
                 ANLAND_ERR("Failed to create allocator");
                 enterFallback();
                 return false;
             }
+            ANLAND_TRACE("tryConnect: allocator created");
 
+            ANLAND_TRACE("tryConnect: updating audio fd");
             updateAudioFd();
+            ANLAND_TRACE("tryConnect: updating camera resources");
             updateCameraResources();
 
             if (m_output) {
+                ANLAND_TRACE("tryConnect: output exists, exiting fallback");
                 m_output->exitFallback();
+                ANLAND_TRACE("tryConnect: reconfiguring swapchain");
                 m_output->reconfigureSwapchain();
-                // 直接触发 frame 事件，让 Hyprland 开始渲染
+                
+                // 强制触发事件
+                ANLAND_TRACE("tryConnect: emitting frame and present events");
                 m_output->events.frame.emit();
+                m_output->events.present.emit(IOutput::SPresentEvent{
+                    .presented = true,
+                    .when = nullptr,
+                    .seq = 0,
+                    .refresh = (int)m_screenRefresh,
+                    .flags = AQ_OUTPUT_PRESENT_VSYNC | AQ_OUTPUT_PRESENT_HW_CLOCK
+                });
+                
+                // 再次调度帧
                 m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_CONNECTOR);
             }
 
+            ANLAND_TRACE("tryConnect: emitting pollFDsChanged");
             m_backend->events.pollFDsChanged.emit();
             return true;
         }
         struct timespec ts = {0, 100000000};
         nanosleep(&ts, nullptr);
     }
+    ANLAND_TRACE("tryConnect: all attempts failed, returning false");
     return false;
 }
 

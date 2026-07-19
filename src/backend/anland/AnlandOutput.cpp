@@ -521,10 +521,22 @@ void CAnlandOutput::exitFallback() {
     ANLAND_TRACE("exitFallback: reconfiguring swapchain");
     reconfigureSwapchain();
 
-    ANLAND_TRACE("exitFallback: scheduling frame");
-    scheduleFrame(AQ_SCHEDULE_NEW_CONNECTOR);
+    // 关键修复：强制发送 frame 和 present 事件
     ANLAND_TRACE("exitFallback: emitting frame event");
     events.frame.emit();
+    
+    ANLAND_TRACE("exitFallback: emitting present event");
+    events.present.emit(IOutput::SPresentEvent{
+        .presented = true,
+        .when = nullptr,
+        .seq = 0,
+        .refresh = (int)m_refresh,
+        .flags = AQ_OUTPUT_PRESENT_VSYNC | AQ_OUTPUT_PRESENT_HW_CLOCK
+    });
+
+    ANLAND_TRACE("exitFallback: scheduling frame");
+    scheduleFrame(AQ_SCHEDULE_NEW_CONNECTOR);
+    
     ANLAND_LOG("exitFallback: done");
     ANLAND_TRACE("exitFallback END");
 }
