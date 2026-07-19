@@ -26,7 +26,7 @@ public:
     virtual CSharedPointer<IBuffer> acquire(const SAllocatorBufferParams& params, CSharedPointer<CSwapchain> swapchain_) override;
     virtual CSharedPointer<CBackend> getBackend() override;
     virtual int drmFD() override { return -1; }
-    virtual eAllocatorType type() override { return AQ_ALLOCATOR_TYPE_NONE; }
+    virtual eAllocatorType type() override { return AQ_ALLOCATOR_TYPE_ANLAND; }
     virtual void destroyBuffers() override;
 
     // Import buffers from display
