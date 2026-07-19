@@ -45,12 +45,14 @@ public:
     virtual std::vector<SDRMFormat> getCursorFormats() override { return {}; }
     virtual bool createOutput(const std::string& name = "") override;
     virtual CSharedPointer<IAllocator> preferredAllocator() override { 
-        return m_allocator ? std::static_pointer_cast<IAllocator>(m_allocator) : nullptr; 
+        // CSharedPointer 支持隐式转换，直接返回即可
+        return m_allocator; 
     }
     virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override { 
         std::vector<CSharedPointer<IAllocator>> result;
         if (m_allocator) {
-            result.push_back(std::static_pointer_cast<IAllocator>(m_allocator));
+            // CSharedPointer 支持隐式转换到基类
+            result.push_back(m_allocator);
         }
         return result;
     }
