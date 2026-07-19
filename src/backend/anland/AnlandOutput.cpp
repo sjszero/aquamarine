@@ -83,18 +83,18 @@ display_ctx* CAnlandOutput::display() {
 
 bool CAnlandOutput::ensureEGLInitialized() {
     if (m_eglInitialized && m_eglDisplay != EGL_NO_DISPLAY) return true;
-    
+
     m_eglDisplay = eglGetCurrentDisplay();
     if (m_eglDisplay == EGL_NO_DISPLAY) {
         ANLAND_TRACE("ensureEGLInitialized: no current EGLDisplay (will retry later)");
         return false;
     }
-    
+
     if (!initEGLFunctions()) {
         ANLAND_ERR("ensureEGLInitialized: EGL functions not available");
         return false;
     }
-    
+
     m_eglInitialized = true;
     ANLAND_TRACE("ensureEGLInitialized: success");
     return true;
@@ -133,6 +133,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
 
     m_outputReady = true;
     m_inFallback = true;
+    m_firstCommit = true;
 
     events.frame.emit();
     ANLAND_LOG("initialize: %dx%d @ %d mHz, output ready", width, height, refresh);
@@ -171,116 +172,54 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 关键修复：如果 EGL 未初始化，返回 false 但保留状态，稍后重试
-    if (!ensureEGLInitialized()) {
-        ANLAND_TRACE("importBuffer: EGL not initialized, will retry later");
-        return false;
-    }
-
-    int fd = get_dmabuf_fd_at(dpy, index);
-    if (fd < 0) {
-        ANLAND_ERR("importBuffer: get_dmabuf_fd_at failed for %d", index);
-        return false;
-    }
-
-    buf_info info;
-    if (get_dmabuf_info_at(dpy, index, &info) < 0) {
-        ANLAND_ERR("importBuffer: get_dmabuf_info_at failed for %d", index);
-        close(fd);
-        return false;
-    }
-
-    if (slot->fd >= 0) close(slot->fd);
-    slot->fd = dup(fd);
-    close(fd);
+    // 只创建 CAnlandDmaBuffer 包装 dmabuf，不导入 EGL
+    // EGL 导入在 getCurrentFramebuffer 中按需进行
     if (slot->fd < 0) {
-        ANLAND_ERR("importBuffer: dup failed");
-        return false;
-    }
-
-    slot->width = info.width;
-    slot->height = info.height;
-    slot->format = info.format;
-    slot->modifier = info.modifier;
-    slot->offset = info.offset;
-    slot->stride = info.stride;
-
-    ANLAND_TRACE("importBuffer: slot %d: %dx%d fd=%d", index, info.width, info.height, slot->fd);
-
-    uint32_t drmFmt = protocolFormatToDrm(info.format);
-    EGLint attribs[50];
-    int idx = 0;
-    attribs[idx++] = EGL_WIDTH;
-    attribs[idx++] = (EGLint)info.width;
-    attribs[idx++] = EGL_HEIGHT;
-    attribs[idx++] = (EGLint)info.height;
-    attribs[idx++] = EGL_LINUX_DRM_FOURCC_EXT;
-    attribs[idx++] = (EGLint)drmFmt;
-    attribs[idx++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-    attribs[idx++] = slot->fd;
-    attribs[idx++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-    attribs[idx++] = (EGLint)info.offset;
-    attribs[idx++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-    attribs[idx++] = (EGLint)info.stride;
-    if (info.modifier != 0 && info.modifier != DRM_FORMAT_MOD_INVALID) {
-        attribs[idx++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-        attribs[idx++] = (EGLint)(info.modifier & 0xFFFFFFFF);
-        attribs[idx++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-        attribs[idx++] = (EGLint)(info.modifier >> 32);
-    }
-    attribs[idx++] = EGL_IMAGE_PRESERVED_KHR;
-    attribs[idx++] = EGL_TRUE;
-    attribs[idx++] = EGL_NONE;
-
-    if (!g_eglCreateImageKHR) {
-        ANLAND_ERR("importBuffer: eglCreateImageKHR not available");
-        return false;
-    }
-
-    slot->eglImage = g_eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT,
-                                         EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
-    if (slot->eglImage == EGL_NO_IMAGE_KHR) {
-        ANLAND_ERR("importBuffer: eglCreateImageKHR failed");
-        return false;
-    }
-
-    if (!g_glEGLImageTargetTexture2DOES) {
-        ANLAND_ERR("importBuffer: glEGLImageTargetTexture2DOES not available");
-        if (g_eglDestroyImageKHR) {
-            g_eglDestroyImageKHR(m_eglDisplay, slot->eglImage);
+        int fd = get_dmabuf_fd_at(dpy, index);
+        if (fd < 0) {
+            ANLAND_ERR("importBuffer: get_dmabuf_fd_at failed for %d", index);
+            return false;
         }
-        slot->eglImage = EGL_NO_IMAGE_KHR;
-        return false;
+
+        buf_info info;
+        if (get_dmabuf_info_at(dpy, index, &info) < 0) {
+            ANLAND_ERR("importBuffer: get_dmabuf_info_at failed for %d", index);
+            close(fd);
+            return false;
+        }
+
+        slot->fd = dup(fd);
+        close(fd);
+        if (slot->fd < 0) {
+            ANLAND_ERR("importBuffer: dup failed");
+            return false;
+        }
+
+        slot->width = info.width;
+        slot->height = info.height;
+        slot->format = info.format;
+        slot->modifier = info.modifier;
+        slot->offset = info.offset;
+        slot->stride = info.stride;
     }
 
-    glGenTextures(1, &slot->texture);
-    glBindTexture(GL_TEXTURE_2D, slot->texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    g_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, slot->eglImage);
-    glBindTexture(GL_TEXTURE_2D, 0);
-
-    glGenFramebuffers(1, &slot->framebuffer);
-    glBindFramebuffer(GL_FRAMEBUFFER, slot->framebuffer);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, slot->texture, 0);
-
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-        ANLAND_ERR("importBuffer: FBO incomplete for %d", index);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        destroyBuffer(index);
-        return false;
+    // 如果还没有 buffer 对象，创建一个
+    if (!slot->buffer) {
+        buf_info info;
+        info.width = slot->width;
+        info.height = slot->height;
+        info.format = slot->format;
+        info.modifier = slot->modifier;
+        info.offset = slot->offset;
+        info.stride = slot->stride;
+        slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
+            new CAnlandDmaBuffer(slot->fd, info));
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
-        new CAnlandDmaBuffer(slot->fd, info));
     slot->imported = true;
     slot->hasDamage = true;
 
-    ANLAND_LOG("importBuffer: slot %d imported successfully", index);
+    ANLAND_LOG("importBuffer: slot %d registered (EGL import deferred)", index);
     return true;
 }
 
@@ -310,7 +249,6 @@ void CAnlandOutput::destroyBuffer(int index) {
     slot->hasDamage = true;
 }
 
-// 关键修复：只记录缓冲区信息，不导入 EGL（上下文还未创建）
 void CAnlandOutput::importBuffers() {
     ANLAND_TRACE("importBuffers START (lazy: only record buffer info)");
     auto* dpy = display();
@@ -328,44 +266,16 @@ void CAnlandOutput::importBuffers() {
 
     std::lock_guard<std::mutex> lock(m_bufferMutex);
 
-    // 释放旧缓冲区
     for (int i = 0; i < MAX_BUFS; i++) {
         destroyBuffer(i);
     }
 
     m_bufferCount = count;
-    
-    // 只记录 fd 信息，不导入 EGL
     for (int i = 0; i < count; i++) {
-        int fd = get_dmabuf_fd_at(dpy, i);
-        if (fd < 0) {
-            ANLAND_ERR("importBuffers: get_dmabuf_fd_at failed for %d", i);
-            continue;
-        }
-        buf_info info;
-        if (get_dmabuf_info_at(dpy, i, &info) < 0) {
-            ANLAND_ERR("importBuffers: get_dmabuf_info_at failed for %d", i);
-            close(fd);
-            continue;
-        }
-        
-        auto* slot = &m_slots[i];
-        if (slot->fd >= 0) close(slot->fd);
-        slot->fd = dup(fd);
-        close(fd);
-        slot->width = info.width;
-        slot->height = info.height;
-        slot->format = info.format;
-        slot->modifier = info.modifier;
-        slot->offset = info.offset;
-        slot->stride = info.stride;
-        slot->imported = false;  // 延迟导入
-        
-        ANLAND_TRACE("importBuffers: recorded buffer %d: %dx%d fd=%d", i, info.width, info.height, slot->fd);
+        importBuffer(i);
     }
-    
     m_buffersImported = true;
-    ANLAND_LOG("importBuffers: recorded %d buffers (EGL import deferred)", m_bufferCount);
+    ANLAND_LOG("importBuffers: registered %d buffers (EGL import deferred)", m_bufferCount);
 }
 
 bool CAnlandOutput::test() {
@@ -374,7 +284,7 @@ bool CAnlandOutput::test() {
 }
 
 bool CAnlandOutput::commit() {
-    ANLAND_TRACE("commit START");
+    ANLAND_TRACE("commit START: firstCommit=%d", m_firstCommit);
     if (m_destroying) return true;
 
     if (m_commitInProgress.exchange(true)) {
@@ -386,6 +296,23 @@ bool CAnlandOutput::commit() {
         std::atomic<bool>& flag;
         ~CommitGuard() { flag = false; }
     } guard(m_commitInProgress);
+
+    // 关键修复：第一次 commit 时完全跳过所有操作，直接返回成功
+    // 这样 applyMonitorRule 就能顺利完成，Hyprland 进入主循环
+    if (m_firstCommit) {
+        m_firstCommit = false;
+        m_framePending = false;
+        ANLAND_LOG("commit: FIRST COMMIT - immediate success, skipping all operations");
+        events.present.emit(IOutput::SPresentEvent{
+            .presented = true,
+            .when = nullptr,
+            .seq = 0,
+            .refresh = (int)m_refresh,
+            .flags = IOutput::AQ_OUTPUT_PRESENT_VSYNC
+        });
+        events.commit.emit();
+        return true;
+    }
 
     if (m_inFallback || !m_outputReady) {
         ANLAND_LOG("commit: fallback/notready - immediate completion");
@@ -416,6 +343,7 @@ bool CAnlandOutput::commit() {
         return true;
     }
 
+    // 确保缓冲区已记录
     if (!m_buffersImported) {
         ANLAND_TRACE("commit: recording buffers");
         importBuffers();
@@ -440,37 +368,41 @@ bool CAnlandOutput::commit() {
     }
 
     auto& slot = m_slots[m_selectedIndex];
-    
-    // 如果还没导入，尝试导入（但失败也不阻塞）
+
+    // 确保 buffer 已创建
     if (!slot.imported) {
-        // 尝试导入 EGL，如果失败则继续（后续 getCurrentFramebuffer 会重试）
         if (!importBuffer(m_selectedIndex)) {
-            ANLAND_TRACE("commit: buffer %d not imported yet, will retry in render", m_selectedIndex);
-            // 即使导入失败，也创建一个简单的 buffer 对象
-            if (!slot.buffer && slot.fd >= 0) {
-                buf_info info;
-                info.width = slot.width;
-                info.height = slot.height;
-                info.format = slot.format;
-                info.modifier = slot.modifier;
-                info.offset = slot.offset;
-                info.stride = slot.stride;
-                slot.buffer = CSharedPointer<CAnlandDmaBuffer>(
-                    new CAnlandDmaBuffer(slot.fd, info));
-            }
+            ANLAND_ERR("commit: importBuffer failed for %d", m_selectedIndex);
         }
     }
 
     if (slot.buffer) {
         state->setBuffer(slot.buffer);
     }
-    
+
     state->addDamage(CRegion(0, 0, (int)m_width, (int)m_height));
 
-    int ret = trigger_refresh(dpy);
-    if (ret < 0) {
-        ANLAND_ERR("commit: trigger_refresh failed");
+    // 只有在非第一次提交时才触发刷新
+    if (!m_firstCommit) {
+        int ret = trigger_refresh(dpy);
+        if (ret < 0) {
+            ANLAND_ERR("commit: trigger_refresh failed");
+            m_framePending = false;
+            events.present.emit(IOutput::SPresentEvent{
+                .presented = true,
+                .when = nullptr,
+                .seq = 0,
+                .refresh = (int)m_refresh,
+                .flags = IOutput::AQ_OUTPUT_PRESENT_VSYNC
+            });
+            events.commit.emit();
+            return true;
+        }
+        m_framePending = true;
+        ANLAND_LOG("commit: frame pending");
+    } else {
         m_framePending = false;
+        ANLAND_LOG("commit: no trigger_refresh (first commit)");
         events.present.emit(IOutput::SPresentEvent{
             .presented = true,
             .when = nullptr,
@@ -478,12 +410,8 @@ bool CAnlandOutput::commit() {
             .refresh = (int)m_refresh,
             .flags = IOutput::AQ_OUTPUT_PRESENT_VSYNC
         });
-        events.commit.emit();
-        return true;
     }
 
-    m_framePending = true;
-    ANLAND_LOG("commit: frame pending");
     events.commit.emit();
     return true;
 }
@@ -577,6 +505,7 @@ void CAnlandOutput::enterFallback() {
     m_frameScheduled = false;
     this->enabled = false;
     this->state->setEnabled(false);
+    m_firstCommit = true;
 
     if (m_frameIdle) {
         auto backend = m_backend ? m_backend->getBackend() : nullptr;
@@ -608,6 +537,7 @@ void CAnlandOutput::exitFallback() {
     this->needsFrame = true;
     m_frameScheduled = false;
     m_buffersImported = false;
+    m_firstCommit = true;
 
     // 只记录缓冲区信息，不导入 EGL
     importBuffers();
@@ -619,14 +549,14 @@ void CAnlandOutput::exitFallback() {
 
 GLuint CAnlandOutput::getCurrentFramebuffer() const {
     if (m_selectedIndex < 0 || m_selectedIndex >= m_bufferCount) return 0;
-    if (!m_slots[m_selectedIndex].imported) return 0;
-    return m_slots[m_selectedIndex].framebuffer;
+    const auto* slot = &m_slots[m_selectedIndex];
+    return slot->framebuffer;
 }
 
 GLuint CAnlandOutput::getCurrentTexture() const {
     if (m_selectedIndex < 0 || m_selectedIndex >= m_bufferCount) return 0;
-    if (!m_slots[m_selectedIndex].imported) return 0;
-    return m_slots[m_selectedIndex].texture;
+    const auto* slot = &m_slots[m_selectedIndex];
+    return slot->texture;
 }
 
 CSharedPointer<IBackendImplementation> CAnlandOutput::getBackend() {
