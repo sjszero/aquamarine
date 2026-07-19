@@ -4,10 +4,11 @@
 #include "AnlandBackend.hpp"
 #include "display_producer.h"
 #include <algorithm>
+#include <cstdio>
 
-#define ANLAND_LOG(fmt, ...) fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__)
-#define ANLAND_ERR(fmt, ...) fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__)
-#define ANLAND_TRACE(fmt, ...) fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__)
+#define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
 namespace Aquamarine {
 
@@ -62,36 +63,48 @@ bool CAnlandAllocator::importBuffers() {
         return false;
     }
 
+    ANLAND_TRACE("importBuffers: acquiring lock");
     std::lock_guard<std::mutex> lock(m_mutex);
+    ANLAND_TRACE("importBuffers: lock acquired");
+
     destroyBuffers();
 
+    ANLAND_TRACE("importBuffers: starting loop for %d buffers", count);
     for (int i = 0; i < count; ++i) {
-        ANLAND_TRACE("importBuffers: getting fd for buffer %d", i);
+        ANLAND_TRACE("importBuffers: loop iteration %d", i);
+        
+        ANLAND_TRACE("importBuffers: calling get_dmabuf_fd_at(%d)", i);
         int fd = get_dmabuf_fd_at(m_display, i);
+        ANLAND_TRACE("importBuffers: get_dmabuf_fd_at returned %d", fd);
+        
         if (fd < 0) {
             ANLAND_ERR("importBuffers: get_dmabuf_fd_at failed for %d", i);
             continue;
         }
         
+        ANLAND_TRACE("importBuffers: calling get_dmabuf_info_at(%d)", i);
         buf_info info;
         if (get_dmabuf_info_at(m_display, i, &info) < 0) {
             ANLAND_ERR("importBuffers: get_dmabuf_info_at failed for %d", i);
             close(fd);
             continue;
         }
+        ANLAND_TRACE("importBuffers: info: %dx%d fd=%d", info.width, info.height, fd);
         
-        ANLAND_TRACE("importBuffers: buffer %d: %dx%d fd=%d", i, info.width, info.height, fd);
-        
+        ANLAND_TRACE("importBuffers: creating CAnlandBuffer for %d", i);
         auto buf = CSharedPointer<CAnlandBuffer>(new CAnlandBuffer(fd, info, this));
+        ANLAND_TRACE("importBuffers: CAnlandBuffer created, good=%d", buf->good());
+        
         if (buf->good()) {
             m_buffers.emplace_back(buf);
-            ANLAND_TRACE("importBuffers: buffer %d imported successfully", i);
+            ANLAND_LOG("importBuffers: buffer %d imported successfully", i);
         } else {
             ANLAND_ERR("importBuffers: buffer %d not good", i);
         }
     }
     m_bufferCount = m_buffers.size();
     ANLAND_LOG("importBuffers: imported %d/%d buffers", m_bufferCount, count);
+    ANLAND_TRACE("importBuffers END");
     return m_bufferCount > 0;
 }
 
@@ -101,6 +114,7 @@ void CAnlandAllocator::destroyBuffers() {
     m_buffers.clear();
     m_bufferCount = 0;
     m_lastAcquired = -1;
+    ANLAND_TRACE("destroyBuffers: done");
 }
 
 CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& params, CSharedPointer<CSwapchain> swapchain_) {
