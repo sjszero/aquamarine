@@ -14,6 +14,7 @@
 
 #define ANLAND_LOG(fmt, ...) fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__)
 #define ANLAND_ERR(fmt, ...) fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__)
+#define ANLAND_TRACE(fmt, ...) fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__)
 
 namespace Aquamarine {
 
@@ -31,7 +32,6 @@ static void anland_fallback_callback(void* data) {
 }
 
 int CAnlandBackend::openDummyDRM() {
-    // 策略：尝试多个可能的 DRM 节点，找到第一个可用的
     const char* paths[] = {
         "/dev/dri/renderD128",
         "/dev/dri/renderD129",
@@ -43,7 +43,6 @@ int CAnlandBackend::openDummyDRM() {
     for (int i = 0; paths[i] != nullptr; i++) {
         int fd = open(paths[i], O_RDWR | O_CLOEXEC);
         if (fd >= 0) {
-            // 验证是否真的是 DRM 设备
             drmVersion* ver = drmGetVersion(fd);
             if (ver) {
                 drmFreeVersion(ver);
@@ -96,8 +95,7 @@ bool CAnlandBackend::start() {
     anland_audio_start();
     anland_camera_start();
 
-    // 关键修复：先创建输出，再尝试连接
-    // 这样 Hyprland 在连接完成时输出已经存在
+    // 先创建输出，再尝试连接
     createOutputIfNeeded();
     emitOutputIfReady();
 
@@ -171,19 +169,22 @@ bool CAnlandBackend::tryConnect() {
                 m_output->exitFallback();
                 ANLAND_TRACE("tryConnect: reconfiguring swapchain");
                 m_output->reconfigureSwapchain();
-                
-                // 强制触发事件
-                ANLAND_TRACE("tryConnect: emitting frame and present events");
+
+                // 强制触发 frame 事件
+                ANLAND_TRACE("tryConnect: emitting frame event");
                 m_output->events.frame.emit();
+
+                // 触发 present 事件，使用正确的标志
+                // SPresentEvent 的 flags 可以使用 IOutput::AQ_OUTPUT_PRESENT_VSYNC
+                ANLAND_TRACE("tryConnect: emitting present event");
                 m_output->events.present.emit(IOutput::SPresentEvent{
                     .presented = true,
                     .when = nullptr,
                     .seq = 0,
                     .refresh = (int)m_screenRefresh,
-                    .flags = AQ_OUTPUT_PRESENT_VSYNC | AQ_OUTPUT_PRESENT_HW_CLOCK
+                    .flags = IOutput::AQ_OUTPUT_PRESENT_VSYNC
                 });
-                
-                // 再次调度帧
+
                 m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_CONNECTOR);
             }
 
@@ -207,7 +208,6 @@ void CAnlandBackend::onReady() {
         m_output->exitFallback();
         m_output->reconfigureSwapchain();
         m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_MONITOR);
-        // 如果 scheduleFrame 没有立即触发，直接触发 frame 事件
         m_output->events.frame.emit();
     }
     ANLAND_LOG("onReady done: fallback=%d", m_inFallback);
@@ -485,8 +485,6 @@ void CAnlandBackend::updateCameraResources() {
 }
 
 std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
-    // 返回标准格式，让 Hyprland 以为我们支持这些格式
-    // 实际上这些格式由 Android 端决定
     std::vector<SDRMFormat> formats;
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
