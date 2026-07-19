@@ -416,7 +416,6 @@ bool CAnlandOutput::commit() {
         return true;
     }
 
-    // 确保缓冲区已记录
     if (!m_buffersImported) {
         ANLAND_TRACE("commit: recording buffers");
         importBuffers();
@@ -435,33 +434,37 @@ bool CAnlandOutput::commit() {
         }
     }
 
-    // 获取当前缓冲区索引
     m_selectedIndex = get_selected_idx(dpy);
     if (m_selectedIndex >= m_bufferCount) {
         m_selectedIndex = 0;
     }
 
-    // 关键修复：在 commit 中导入 EGL（此时上下文已存在）
-    if (!m_slots[m_selectedIndex].imported) {
-        ANLAND_TRACE("commit: importing EGL for buffer %d", m_selectedIndex);
+    auto& slot = m_slots[m_selectedIndex];
+    
+    // 如果还没导入，尝试导入（但失败也不阻塞）
+    if (!slot.imported) {
+        // 尝试导入 EGL，如果失败则继续（后续 getCurrentFramebuffer 会重试）
         if (!importBuffer(m_selectedIndex)) {
-            ANLAND_ERR("commit: importBuffer failed for %d", m_selectedIndex);
-            // 即使导入失败也返回成功，让 Hyprland 继续
-            m_framePending = false;
-            events.present.emit(IOutput::SPresentEvent{
-                .presented = true,
-                .when = nullptr,
-                .seq = 0,
-                .refresh = (int)m_refresh,
-                .flags = IOutput::AQ_OUTPUT_PRESENT_VSYNC
-            });
-            events.commit.emit();
-            return true;
+            ANLAND_TRACE("commit: buffer %d not imported yet, will retry in render", m_selectedIndex);
+            // 即使导入失败，也创建一个简单的 buffer 对象
+            if (!slot.buffer && slot.fd >= 0) {
+                buf_info info;
+                info.width = slot.width;
+                info.height = slot.height;
+                info.format = slot.format;
+                info.modifier = slot.modifier;
+                info.offset = slot.offset;
+                info.stride = slot.stride;
+                slot.buffer = CSharedPointer<CAnlandDmaBuffer>(
+                    new CAnlandDmaBuffer(slot.fd, info));
+            }
         }
     }
 
-    auto& slot = m_slots[m_selectedIndex];
-    state->setBuffer(slot.buffer);
+    if (slot.buffer) {
+        state->setBuffer(slot.buffer);
+    }
+    
     state->addDamage(CRegion(0, 0, (int)m_width, (int)m_height));
 
     int ret = trigger_refresh(dpy);
