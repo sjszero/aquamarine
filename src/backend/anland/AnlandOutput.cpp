@@ -37,14 +37,7 @@ static bool initEGLFunctions() {
     return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr && g_glEGLImageTargetTexture2DOES != nullptr;
 }
 
-static uint32_t protocolFormatToDrm(uint32_t fmt) {
-    switch (fmt) {
-        case 1: return DRM_FORMAT_ABGR8888;
-        case 2: return DRM_FORMAT_XBGR8888;
-        case 3: return DRM_FORMAT_RGB565;
-        default: return DRM_FORMAT_XRGB8888;
-    }
-}
+// 移除 protocolFormatToDrm，因为未使用
 
 CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     : m_backend(backend) {
@@ -65,6 +58,7 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
         m_slots[i].texture = 0;
         m_slots[i].eglImage = EGL_NO_IMAGE_KHR;
     }
+    m_firstCommit = true;
     ANLAND_TRACE("CAnlandOutput constructor END");
 }
 
@@ -172,8 +166,6 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 只创建 CAnlandDmaBuffer 包装 dmabuf，不导入 EGL
-    // EGL 导入在 getCurrentFramebuffer 中按需进行
     if (slot->fd < 0) {
         int fd = get_dmabuf_fd_at(dpy, index);
         if (fd < 0) {
@@ -201,9 +193,9 @@ bool CAnlandOutput::importBuffer(int index) {
         slot->modifier = info.modifier;
         slot->offset = info.offset;
         slot->stride = info.stride;
+        ANLAND_TRACE("importBuffer: buffer %d: %dx%d fd=%d", index, info.width, info.height, slot->fd);
     }
 
-    // 如果还没有 buffer 对象，创建一个
     if (!slot->buffer) {
         buf_info info;
         info.width = slot->width;
@@ -297,8 +289,6 @@ bool CAnlandOutput::commit() {
         ~CommitGuard() { flag = false; }
     } guard(m_commitInProgress);
 
-    // 关键修复：第一次 commit 时完全跳过所有操作，直接返回成功
-    // 这样 applyMonitorRule 就能顺利完成，Hyprland 进入主循环
     if (m_firstCommit) {
         m_firstCommit = false;
         m_framePending = false;
@@ -343,7 +333,6 @@ bool CAnlandOutput::commit() {
         return true;
     }
 
-    // 确保缓冲区已记录
     if (!m_buffersImported) {
         ANLAND_TRACE("commit: recording buffers");
         importBuffers();
@@ -369,7 +358,6 @@ bool CAnlandOutput::commit() {
 
     auto& slot = m_slots[m_selectedIndex];
 
-    // 确保 buffer 已创建
     if (!slot.imported) {
         if (!importBuffer(m_selectedIndex)) {
             ANLAND_ERR("commit: importBuffer failed for %d", m_selectedIndex);
@@ -382,7 +370,7 @@ bool CAnlandOutput::commit() {
 
     state->addDamage(CRegion(0, 0, (int)m_width, (int)m_height));
 
-    // 只有在非第一次提交时才触发刷新
+    // 非第一次 commit 时触发刷新
     if (!m_firstCommit) {
         int ret = trigger_refresh(dpy);
         if (ret < 0) {
@@ -539,7 +527,6 @@ void CAnlandOutput::exitFallback() {
     m_buffersImported = false;
     m_firstCommit = true;
 
-    // 只记录缓冲区信息，不导入 EGL
     importBuffers();
 
     scheduleFrame(AQ_SCHEDULE_NEW_CONNECTOR);

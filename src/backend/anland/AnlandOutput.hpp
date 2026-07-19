@@ -28,7 +28,6 @@ using Hyprutils::Memory::makeShared;
 class CAnlandBackend;
 class CAnlandDmaBuffer;
 
-// 模仿 KWin 的 AnlandEglLayer
 class CAnlandOutput : public IOutput {
 public:
     explicit CAnlandOutput(CAnlandBackend* backend);
@@ -60,7 +59,7 @@ public:
     bool isInFallback() const { return m_inFallback; }
     void onBufferReady();
 
-    // 获取当前渲染目标 (模仿 KWin 的 AnlandEglLayer)
+    // 获取当前渲染目标
     GLuint getCurrentFramebuffer() const;
     GLuint getCurrentTexture() const;
 
@@ -69,14 +68,14 @@ public:
     uint32_t getHeight() const { return m_height; }
 
 private:
-    // 导入 dmabuf 到 GL
     bool importBuffer(int index);
     void destroyBuffer(int index);
     void importBuffers();
 
+    bool ensureEGLInitialized();
+
     CAnlandBackend* m_backend = nullptr;
 
-    // dmabuf 槽位 (模仿 KWin 的 m_textures/m_fbos)
     struct BufferSlot {
         int fd = -1;
         uint32_t width = 0, height = 0;
@@ -102,6 +101,7 @@ private:
     bool m_inFallback = true;
     bool m_outputReady = false;
     bool m_buffersImported = false;
+    bool m_firstCommit = true;           // 第一次 commit 跳过所有操作
     std::atomic<bool> m_framePending{false};
     std::atomic<bool> m_commitInProgress{false};
 
@@ -118,8 +118,6 @@ private:
     mutable std::mutex m_bufferMutex;
     std::atomic<bool> m_destroying{false};
     std::atomic<bool> m_shutdownDone{false};
-
-    bool ensureEGLInitialized();
 };
 
 } // namespace Aquamarine
