@@ -109,7 +109,7 @@ private:
     std::atomic<bool> m_framePending{false};
     std::atomic<bool> m_commitInProgress{false};
 
-    CSharedPointer<CSwapchain> m_swapchain;
+    // 注意：使用基类的 swapchain 成员，不在此处重复定义
 
     bool m_frameScheduled = false;
     CSharedPointer<std::function<void(void)>> m_frameIdle;

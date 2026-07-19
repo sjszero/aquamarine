@@ -66,7 +66,7 @@ CAnlandOutput::~CAnlandOutput() {
     if (m_shutdownDone.exchange(true)) return;
     m_destroying = true;
     releaseBuffers();
-    m_swapchain.reset();
+    // 基类的 swapchain 由基类析构处理
     ANLAND_TRACE("CAnlandOutput destructor END");
 }
 
@@ -150,7 +150,8 @@ void CAnlandOutput::releaseBuffers() {
     }
     m_bufferCount = 0;
     m_buffersImported = false;
-    m_swapchain.reset();
+    // 基类的 swapchain 在这里重置
+    this->swapchain.reset();
     ANLAND_TRACE("releaseBuffers END");
 }
 
@@ -166,14 +167,15 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
-    if (!m_swapchain) {
+    // 使用基类的 swapchain
+    if (!this->swapchain) {
         auto alloc = CAnlandAllocator::create(this);
         if (!alloc) {
             ANLAND_ERR("reconfigureSwapchain: failed to create allocator");
             return;
         }
-        m_swapchain = CSwapchain::create(alloc, m_backend->self.lock());
-        if (!m_swapchain) {
+        this->swapchain = CSwapchain::create(alloc, m_backend->self.lock());
+        if (!this->swapchain) {
             ANLAND_ERR("reconfigureSwapchain: failed to create swapchain");
             return;
         }
@@ -185,7 +187,7 @@ void CAnlandOutput::reconfigureSwapchain() {
     opts.format = DRM_FORMAT_XRGB8888;
     opts.scanout = true;
 
-    if (!m_swapchain->reconfigure(opts)) {
+    if (!this->swapchain->reconfigure(opts)) {
         ANLAND_ERR("reconfigureSwapchain: failed to reconfigure");
         return;
     }
@@ -445,7 +447,7 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     this->needsFrame = true;
 
     // 确保 swapchain 已配置
-    if (m_buffersImported && !m_swapchain) {
+    if (m_buffersImported && !this->swapchain) {
         reconfigureSwapchain();
     }
 
@@ -527,7 +529,8 @@ void CAnlandOutput::enterFallback() {
     this->enabled = false;
     this->state->setEnabled(false);
     m_shouldTriggerRefresh = false;
-    m_swapchain.reset();
+    // 基类的 swapchain 在这里重置
+    this->swapchain.reset();
 
     if (m_frameIdle) {
         auto backend = m_backend ? m_backend->getBackend() : nullptr;
@@ -560,7 +563,8 @@ void CAnlandOutput::exitFallback() {
     m_frameScheduled = false;
     m_buffersImported = false;
     m_shouldTriggerRefresh = false;
-    m_swapchain.reset();
+    // 基类的 swapchain 在这里重置
+    this->swapchain.reset();
 
     importBuffers();
     reconfigureSwapchain();
