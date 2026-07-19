@@ -59,7 +59,6 @@ public:
     bool isInFallback() const { return m_inFallback; }
     void onBufferReady();
 
-    // 获取当前渲染目标
     GLuint getCurrentFramebuffer() const;
     GLuint getCurrentTexture() const;
 
@@ -71,7 +70,6 @@ private:
     bool importBuffer(int index);
     void destroyBuffer(int index);
     void importBuffers();
-
     bool ensureEGLInitialized();
 
     CAnlandBackend* m_backend = nullptr;
@@ -101,7 +99,7 @@ private:
     bool m_inFallback = true;
     bool m_outputReady = false;
     bool m_buffersImported = false;
-    bool m_firstCommit = true;           // 第一次 commit 跳过所有操作
+    bool m_shouldTriggerRefresh = false;   // 由 scheduleFrame 设置，commit 消费
     std::atomic<bool> m_framePending{false};
     std::atomic<bool> m_commitInProgress{false};
 

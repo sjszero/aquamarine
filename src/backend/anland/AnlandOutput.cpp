@@ -37,8 +37,6 @@ static bool initEGLFunctions() {
     return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr && g_glEGLImageTargetTexture2DOES != nullptr;
 }
 
-// 移除 protocolFormatToDrm，因为未使用
-
 CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     : m_backend(backend) {
     ANLAND_TRACE("CAnlandOutput constructor START");
@@ -58,7 +56,7 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
         m_slots[i].texture = 0;
         m_slots[i].eglImage = EGL_NO_IMAGE_KHR;
     }
-    m_firstCommit = true;
+    m_shouldTriggerRefresh = false;
     ANLAND_TRACE("CAnlandOutput constructor END");
 }
 
@@ -127,7 +125,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
 
     m_outputReady = true;
     m_inFallback = true;
-    m_firstCommit = true;
+    m_shouldTriggerRefresh = false;
 
     events.frame.emit();
     ANLAND_LOG("initialize: %dx%d @ %d mHz, output ready", width, height, refresh);
@@ -276,7 +274,7 @@ bool CAnlandOutput::test() {
 }
 
 bool CAnlandOutput::commit() {
-    ANLAND_TRACE("commit START: firstCommit=%d", m_firstCommit);
+    ANLAND_TRACE("commit START: shouldTriggerRefresh=%d", m_shouldTriggerRefresh);
     if (m_destroying) return true;
 
     if (m_commitInProgress.exchange(true)) {
@@ -288,21 +286,6 @@ bool CAnlandOutput::commit() {
         std::atomic<bool>& flag;
         ~CommitGuard() { flag = false; }
     } guard(m_commitInProgress);
-
-    if (m_firstCommit) {
-        m_firstCommit = false;
-        m_framePending = false;
-        ANLAND_LOG("commit: FIRST COMMIT - immediate success, skipping all operations");
-        events.present.emit(IOutput::SPresentEvent{
-            .presented = true,
-            .when = nullptr,
-            .seq = 0,
-            .refresh = (int)m_refresh,
-            .flags = IOutput::AQ_OUTPUT_PRESENT_VSYNC
-        });
-        events.commit.emit();
-        return true;
-    }
 
     if (m_inFallback || !m_outputReady) {
         ANLAND_LOG("commit: fallback/notready - immediate completion");
@@ -370,8 +353,9 @@ bool CAnlandOutput::commit() {
 
     state->addDamage(CRegion(0, 0, (int)m_width, (int)m_height));
 
-    // 非第一次 commit 时触发刷新
-    if (!m_firstCommit) {
+    // 只有 scheduleFrame 设置了标志时才真正触发刷新
+    if (m_shouldTriggerRefresh) {
+        m_shouldTriggerRefresh = false;
         int ret = trigger_refresh(dpy);
         if (ret < 0) {
             ANLAND_ERR("commit: trigger_refresh failed");
@@ -387,10 +371,10 @@ bool CAnlandOutput::commit() {
             return true;
         }
         m_framePending = true;
-        ANLAND_LOG("commit: frame pending");
+        ANLAND_LOG("commit: frame pending (trigger_refresh called)");
     } else {
         m_framePending = false;
-        ANLAND_LOG("commit: no trigger_refresh (first commit)");
+        ANLAND_LOG("commit: no trigger_refresh (mode setting or idle)");
         events.present.emit(IOutput::SPresentEvent{
             .presented = true,
             .when = nullptr,
@@ -419,12 +403,17 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     m_frameScheduled = true;
     this->needsFrame = true;
 
+    // 标记下一次 commit 应该触发刷新
+    m_shouldTriggerRefresh = true;
+
     events.frame.emit();
 
     if (!m_frameIdle) {
         m_frameIdle = makeShared<std::function<void(void)>>([this]() {
             m_frameScheduled = false;
             if (m_destroying || m_inFallback || !m_outputReady) return;
+            // 重新触发，确保渲染循环继续
+            m_shouldTriggerRefresh = true;
             events.frame.emit();
         });
     }
@@ -493,7 +482,7 @@ void CAnlandOutput::enterFallback() {
     m_frameScheduled = false;
     this->enabled = false;
     this->state->setEnabled(false);
-    m_firstCommit = true;
+    m_shouldTriggerRefresh = false;
 
     if (m_frameIdle) {
         auto backend = m_backend ? m_backend->getBackend() : nullptr;
@@ -525,7 +514,7 @@ void CAnlandOutput::exitFallback() {
     this->needsFrame = true;
     m_frameScheduled = false;
     m_buffersImported = false;
-    m_firstCommit = true;
+    m_shouldTriggerRefresh = false;
 
     importBuffers();
 
