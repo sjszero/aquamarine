@@ -35,9 +35,8 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
 }
 
 CSharedPointer<CBackend> CAnlandAllocator::getBackend() {
-    // CAnlandAllocator 不需要真正的 CBackend
-    // 因为 CSwapchain 只使用 acquire() 和 type()
-    return nullptr;
+    if (!m_output) return nullptr;
+    return m_output->getCBackend();
 }
 
 } // namespace Aquamarine
