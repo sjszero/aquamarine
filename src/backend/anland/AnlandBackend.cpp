@@ -161,6 +161,28 @@ void CAnlandBackend::onFallback() {
     m_backend->events.pollFDsChanged.emit();
 }
 
+void CAnlandBackend::enterFallback() {
+    if (m_inFallback || m_destroying) return;
+    
+    ANLAND_LOG("enterFallback: manually entering fallback");
+    
+    m_inFallback = true;
+    m_outputEmitted = false;
+    
+    anland_audio_set_fd(-1);
+    anland_camera_clear();
+    
+    m_allocator.reset();
+    
+    if (m_output) {
+        m_output->enterFallback();
+        m_output->releaseBuffers();
+    }
+    
+    setupReconnectTimer();
+    m_backend->events.pollFDsChanged.emit();
+}
+
 std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
     std::vector<CSharedPointer<SPollFD>> result;
     if (!m_running || m_destroying) return result;
