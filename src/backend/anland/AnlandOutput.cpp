@@ -2,6 +2,7 @@
 #include "AnlandOutput.hpp"
 #include "AnlandBackend.hpp"
 #include "AnlandBuffer.hpp"
+#include "AnlandAllocator.hpp"
 #include <drm_fourcc.h>
 #include <poll.h>
 #include <sys/eventfd.h>
@@ -65,6 +66,7 @@ CAnlandOutput::~CAnlandOutput() {
     if (m_shutdownDone.exchange(true)) return;
     m_destroying = true;
     releaseBuffers();
+    m_swapchain.reset();
     ANLAND_TRACE("CAnlandOutput destructor END");
 }
 
@@ -148,7 +150,46 @@ void CAnlandOutput::releaseBuffers() {
     }
     m_bufferCount = 0;
     m_buffersImported = false;
+    m_swapchain.reset();
     ANLAND_TRACE("releaseBuffers END");
+}
+
+void CAnlandOutput::reconfigureSwapchain() {
+    ANLAND_TRACE("reconfigureSwapchain START");
+    if (!m_buffersImported || m_bufferCount <= 0) {
+        ANLAND_TRACE("reconfigureSwapchain: no buffers");
+        return;
+    }
+
+    if (!m_backend) {
+        ANLAND_ERR("reconfigureSwapchain: no backend");
+        return;
+    }
+
+    if (!m_swapchain) {
+        auto alloc = CAnlandAllocator::create(this);
+        if (!alloc) {
+            ANLAND_ERR("reconfigureSwapchain: failed to create allocator");
+            return;
+        }
+        m_swapchain = CSwapchain::create(alloc, m_backend->self.lock());
+        if (!m_swapchain) {
+            ANLAND_ERR("reconfigureSwapchain: failed to create swapchain");
+            return;
+        }
+    }
+
+    SSwapchainOptions opts;
+    opts.length = m_bufferCount;
+    opts.size = Hyprutils::Math::Vector2D((float)m_width, (float)m_height);
+    opts.format = DRM_FORMAT_XRGB8888;
+    opts.scanout = true;
+
+    if (!m_swapchain->reconfigure(opts)) {
+        ANLAND_ERR("reconfigureSwapchain: failed to reconfigure");
+        return;
+    }
+    ANLAND_LOG("reconfigureSwapchain: success, %d buffers", m_bufferCount);
 }
 
 bool CAnlandOutput::importBuffer(int index) {
@@ -332,6 +373,8 @@ bool CAnlandOutput::commit() {
             events.commit.emit();
             return true;
         }
+        // 导入后重新配置 swapchain
+        reconfigureSwapchain();
     }
 
     m_selectedIndex = get_selected_idx(dpy);
@@ -353,7 +396,6 @@ bool CAnlandOutput::commit() {
 
     state->addDamage(CRegion(0, 0, (int)m_width, (int)m_height));
 
-    // 只有 scheduleFrame 设置了标志时才真正触发刷新
     if (m_shouldTriggerRefresh) {
         m_shouldTriggerRefresh = false;
         int ret = trigger_refresh(dpy);
@@ -403,7 +445,11 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     m_frameScheduled = true;
     this->needsFrame = true;
 
-    // 标记下一次 commit 应该触发刷新
+    // 确保 swapchain 已配置
+    if (m_buffersImported && !m_swapchain) {
+        reconfigureSwapchain();
+    }
+
     m_shouldTriggerRefresh = true;
 
     events.frame.emit();
@@ -412,7 +458,6 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
         m_frameIdle = makeShared<std::function<void(void)>>([this]() {
             m_frameScheduled = false;
             if (m_destroying || m_inFallback || !m_outputReady) return;
-            // 重新触发，确保渲染循环继续
             m_shouldTriggerRefresh = true;
             events.frame.emit();
         });
@@ -483,6 +528,7 @@ void CAnlandOutput::enterFallback() {
     this->enabled = false;
     this->state->setEnabled(false);
     m_shouldTriggerRefresh = false;
+    m_swapchain.reset();
 
     if (m_frameIdle) {
         auto backend = m_backend ? m_backend->getBackend() : nullptr;
@@ -515,24 +561,19 @@ void CAnlandOutput::exitFallback() {
     m_frameScheduled = false;
     m_buffersImported = false;
     m_shouldTriggerRefresh = false;
+    m_swapchain.reset();
 
     importBuffers();
+    reconfigureSwapchain();
 
     scheduleFrame(AQ_SCHEDULE_NEW_CONNECTOR);
     events.frame.emit();
     ANLAND_TRACE("exitFallback END");
 }
 
-GLuint CAnlandOutput::getCurrentFramebuffer() const {
-    if (m_selectedIndex < 0 || m_selectedIndex >= m_bufferCount) return 0;
-    const auto* slot = &m_slots[m_selectedIndex];
-    return slot->framebuffer;
-}
-
-GLuint CAnlandOutput::getCurrentTexture() const {
-    if (m_selectedIndex < 0 || m_selectedIndex >= m_bufferCount) return 0;
-    const auto* slot = &m_slots[m_selectedIndex];
-    return slot->texture;
+CSharedPointer<CAnlandDmaBuffer> CAnlandOutput::getBuffer(int index) const {
+    if (index < 0 || index >= m_bufferCount) return nullptr;
+    return m_slots[index].buffer;
 }
 
 CSharedPointer<IBackendImplementation> CAnlandOutput::getBackend() {

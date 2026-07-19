@@ -8,7 +8,8 @@
 
 namespace Aquamarine {
 
-// 直接包装 Android dmabuf 的 Buffer 类
+class CAnlandAllocator;
+
 class CAnlandDmaBuffer : public IBuffer {
 public:
     CAnlandDmaBuffer(int fd, const buf_info& info);

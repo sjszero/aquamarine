@@ -4,6 +4,7 @@
 
 #include <aquamarine/output/Output.hpp>
 #include <aquamarine/buffer/Buffer.hpp>
+#include <aquamarine/allocator/Swapchain.hpp>
 #include <hyprutils/memory/SharedPtr.hpp>
 #include <hyprutils/os/FileDescriptor.hpp>
 #include <hyprutils/math/Region.hpp>
@@ -59,8 +60,9 @@ public:
     bool isInFallback() const { return m_inFallback; }
     void onBufferReady();
 
-    GLuint getCurrentFramebuffer() const;
-    GLuint getCurrentTexture() const;
+    // 用于 CAnlandAllocator
+    int getBufferCount() const { return m_bufferCount; }
+    CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
 
     display_ctx* display();
     uint32_t getWidth() const { return m_width; }
@@ -71,6 +73,7 @@ private:
     void destroyBuffer(int index);
     void importBuffers();
     bool ensureEGLInitialized();
+    void reconfigureSwapchain();
 
     CAnlandBackend* m_backend = nullptr;
 
@@ -99,9 +102,11 @@ private:
     bool m_inFallback = true;
     bool m_outputReady = false;
     bool m_buffersImported = false;
-    bool m_shouldTriggerRefresh = false;   // 由 scheduleFrame 设置，commit 消费
+    bool m_shouldTriggerRefresh = false;
     std::atomic<bool> m_framePending{false};
     std::atomic<bool> m_commitInProgress{false};
+
+    CSharedPointer<CSwapchain> m_swapchain;
 
     bool m_frameScheduled = false;
     CSharedPointer<std::function<void(void)>> m_frameIdle;
