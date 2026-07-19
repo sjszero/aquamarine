@@ -21,6 +21,25 @@ using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::Math::CRegion;
 
+// 全局 EGL 函数指针
+static PFNEGLCREATEIMAGEKHRPROC g_eglCreateImageKHR = nullptr;
+static PFNEGLDESTROYIMAGEKHRPROC g_eglDestroyImageKHR = nullptr;
+static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC g_glEGLImageTargetTexture2DOES = nullptr;
+static bool g_eglFunctionsInitialized = false;
+
+static bool initEGLFunctions() {
+    if (g_eglFunctionsInitialized) {
+        return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr;
+    }
+    
+    g_eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+    g_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+    g_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+    
+    g_eglFunctionsInitialized = true;
+    return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr && g_glEGLImageTargetTexture2DOES != nullptr;
+}
+
 static uint32_t protocolFormatToDrm(uint32_t fmt) {
     switch (fmt) {
         case 1: return DRM_FORMAT_ABGR8888;
@@ -67,11 +86,18 @@ display_ctx* CAnlandOutput::display() {
 
 bool CAnlandOutput::ensureEGLInitialized() {
     if (m_eglInitialized && m_eglDisplay != EGL_NO_DISPLAY) return true;
+    
     m_eglDisplay = eglGetCurrentDisplay();
     if (m_eglDisplay == EGL_NO_DISPLAY) {
         ANLAND_ERR("ensureEGLInitialized: no current EGLDisplay");
         return false;
     }
+    
+    if (!initEGLFunctions()) {
+        ANLAND_ERR("ensureEGLInitialized: EGL functions not available");
+        return false;
+    }
+    
     m_eglInitialized = true;
     ANLAND_TRACE("ensureEGLInitialized: success");
     return true;
@@ -210,25 +236,23 @@ bool CAnlandOutput::importBuffer(int index) {
     attribs[idx++] = EGL_TRUE;
     attribs[idx++] = EGL_NONE;
 
-    PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR =
-        (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-    if (!eglCreateImageKHR) {
+    if (!g_eglCreateImageKHR) {
         ANLAND_ERR("importBuffer: eglCreateImageKHR not available");
         return false;
     }
 
-    slot->eglImage = eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT,
-                                        EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
+    slot->eglImage = g_eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT,
+                                         EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
     if (slot->eglImage == EGL_NO_IMAGE_KHR) {
         ANLAND_ERR("importBuffer: eglCreateImageKHR failed");
         return false;
     }
 
-    PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES =
-        (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
-    if (!glEGLImageTargetTexture2DOES) {
+    if (!g_glEGLImageTargetTexture2DOES) {
         ANLAND_ERR("importBuffer: glEGLImageTargetTexture2DOES not available");
-        eglDestroyImageKHR(m_eglDisplay, slot->eglImage);
+        if (g_eglDestroyImageKHR) {
+            g_eglDestroyImageKHR(m_eglDisplay, slot->eglImage);
+        }
         slot->eglImage = EGL_NO_IMAGE_KHR;
         return false;
     }
@@ -239,7 +263,7 @@ bool CAnlandOutput::importBuffer(int index) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, slot->eglImage);
+    g_glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, slot->eglImage);
     glBindTexture(GL_TEXTURE_2D, 0);
 
     glGenFramebuffers(1, &slot->framebuffer);
@@ -276,12 +300,8 @@ void CAnlandOutput::destroyBuffer(int index) {
         glDeleteTextures(1, &slot->texture);
         slot->texture = 0;
     }
-    if (slot->eglImage != EGL_NO_IMAGE_KHR && m_eglDisplay != EGL_NO_DISPLAY) {
-        PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR =
-            (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
-        if (eglDestroyImageKHR) {
-            eglDestroyImageKHR(m_eglDisplay, slot->eglImage);
-        }
+    if (slot->eglImage != EGL_NO_IMAGE_KHR && m_eglDisplay != EGL_NO_DISPLAY && g_eglDestroyImageKHR) {
+        g_eglDestroyImageKHR(m_eglDisplay, slot->eglImage);
         slot->eglImage = EGL_NO_IMAGE_KHR;
     }
     if (slot->fd >= 0) {
@@ -474,7 +494,7 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     }
 
     m_frameScheduled = true;
-    m_needsFrame = true;
+    this->needsFrame = true;
 
     events.frame.emit();
 
@@ -538,7 +558,7 @@ void CAnlandOutput::onBufferReady() {
         .flags = IOutput::AQ_OUTPUT_PRESENT_VSYNC | IOutput::AQ_OUTPUT_PRESENT_HW_CLOCK
     });
 
-    m_needsFrame = false;
+    this->needsFrame = false;
     ANLAND_LOG("onBufferReady: done");
     ANLAND_TRACE("onBufferReady END");
 }
@@ -584,7 +604,7 @@ void CAnlandOutput::exitFallback() {
     this->state->setEnabled(true);
 
     m_outputReady = true;
-    m_needsFrame = true;
+    this->needsFrame = true;
     m_frameScheduled = false;
     m_buffersImported = false;
 
