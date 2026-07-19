@@ -30,6 +30,7 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     this->subpixel = AQ_SUBPIXEL_UNKNOWN;
     this->enabled = false;
     this->state = makeShared<COutputState>();
+    m_firstCommit = true;
     ANLAND_LOG("CAnlandOutput constructed");
 }
 
@@ -77,6 +78,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setFormat(DRM_FORMAT_XRGB8888);
 
     m_outputReady = true;
+    m_firstCommit = true;
     ANLAND_LOG("initialize: %dx%d @ %d mHz", width, height, refresh);
     return true;
 }
@@ -166,6 +168,24 @@ bool CAnlandOutput::commit() {
     } guard(m_commitInProgress);
 
     if (m_inFallback || !m_outputReady) {
+        return true;
+    }
+
+    // 关键修复：第一次 commit 立即完成，让 Hyprland 初始化
+    if (m_firstCommit) {
+        m_firstCommit = false;
+        m_framePending = false;
+        ANLAND_LOG("commit: first commit - immediate completion");
+
+        // 立即发送 present 事件，让 Hyprland 继续初始化
+        events.present.emit(IOutput::SPresentEvent{
+            .presented = true,
+            .when = nullptr,
+            .seq = 0,
+            .refresh = (int)m_refresh,
+            .flags = AQ_OUTPUT_PRESENT_VSYNC | AQ_OUTPUT_PRESENT_HW_CLOCK
+        });
+        events.commit.emit();
         return true;
     }
 
@@ -287,6 +307,9 @@ void CAnlandOutput::exitFallback() {
     m_outputReady = true;
     m_needsFrame = true;
     m_frameScheduled = false;
+
+    // 重置 firstCommit 标志，以便在退出 fallback 后重新初始化
+    m_firstCommit = true;
 
     reconfigureSwapchain();
     scheduleFrame(AQ_SCHEDULE_NEW_CONNECTOR);

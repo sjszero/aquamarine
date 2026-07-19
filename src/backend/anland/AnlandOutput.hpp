@@ -23,13 +23,12 @@ using Hyprutils::Memory::makeShared;
 
 class CAnlandBackend;
 
-// 假装是标准 Output，实际上通过 display_producer 与 Android 通信
 class CAnlandOutput : public IOutput {
 public:
     explicit CAnlandOutput(CAnlandBackend* backend);
     virtual ~CAnlandOutput();
 
-    // IOutput - 假装是标准 DRM output
+    // IOutput
     virtual bool commit() override;
     virtual bool test() override;
     virtual CSharedPointer<IBackendImplementation> getBackend() override;
@@ -40,7 +39,7 @@ public:
     virtual size_t getDeGammaSize() override { return 0; }
     virtual bool destroy() override { return false; }
 
-    // 假装支持硬件光标（实际不支持）
+    // Cursor (不支持硬件光标)
     virtual bool setCursor(CSharedPointer<IBuffer> buffer, const Hyprutils::Math::Vector2D& hotspot) override { return false; }
     virtual void moveCursor(const Hyprutils::Math::Vector2D& coord, bool skipSchedule = false) override {}
     virtual void setCursorVisible(bool visible) override {}
@@ -68,6 +67,7 @@ private:
 
     bool m_inFallback = true;
     bool m_outputReady = false;
+    bool m_firstCommit = true;      // 第一次 commit 立即完成，让 Hyprland 初始化
     std::atomic<bool> m_needsFrame{false};
     std::atomic<bool> m_framePending{false};
     std::atomic<bool> m_commitInProgress{false};
