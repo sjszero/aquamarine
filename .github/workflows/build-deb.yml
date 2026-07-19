@@ -122,7 +122,7 @@ jobs:
             libre2-dev libmuparser-dev liblcms2-dev \
             liblua5.4-dev \
             hwdata \
-            libglslang-dev libglslang-default-resource-limits-dev
+            glslang-dev glslang-tools
 
       - name: Install backports dependencies
         run: |
