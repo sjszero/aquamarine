@@ -44,10 +44,15 @@ public:
     virtual std::vector<SDRMFormat> getRenderFormats() override;
     virtual std::vector<SDRMFormat> getCursorFormats() override { return {}; }
     virtual bool createOutput(const std::string& name = "") override;
-    virtual CSharedPointer<IAllocator> preferredAllocator() override { return m_allocator; }
+    virtual CSharedPointer<IAllocator> preferredAllocator() override { 
+        return m_allocator ? std::static_pointer_cast<IAllocator>(m_allocator) : nullptr; 
+    }
     virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override { 
-        if (m_allocator) return {m_allocator}; 
-        return {}; 
+        std::vector<CSharedPointer<IAllocator>> result;
+        if (m_allocator) {
+            result.push_back(std::static_pointer_cast<IAllocator>(m_allocator));
+        }
+        return result;
     }
     virtual CWeakPointer<IBackendImplementation> getPrimary() override { return self; }
 

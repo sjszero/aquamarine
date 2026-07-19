@@ -20,7 +20,9 @@ public:
 
     // IAllocator overrides
     virtual Hyprutils::Memory::CSharedPointer<IBuffer> acquire(const SAllocatorBufferParams& params, Hyprutils::Memory::CSharedPointer<CSwapchain> swapchain_) override;
-    virtual Hyprutils::Memory::CSharedPointer<CBackend> getBackend() override;
+    Hyprutils::Memory::CSharedPointer<CBackend> CAnlandAllocator::getBackend() {
+        return m_backend ? m_backend->getBackend() : nullptr;
+    }
     virtual int drmFD() override { return -1; }
     virtual eAllocatorType type() override { return AQ_ALLOCATOR_TYPE_MISC; }
     virtual void destroyBuffers() override;
