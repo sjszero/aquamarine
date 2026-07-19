@@ -130,32 +130,6 @@ bool CAnlandBackend::tryConnect() {
         ANLAND_LOG("connected to daemon: %dx%d @ %d mHz", width, height, refresh);
     }
 
-    if (try_exit_fallback(m_display) == 0) {
-        m_inFallback = false;
-        ANLAND_LOG("consumer connected, exiting fallback (attempt %d)", attempt);
-
-        m_allocator = CAnlandAllocator::create(m_display, this);
-        if (!m_allocator) {
-            ANLAND_ERR("Failed to create allocator");
-            enterFallback();
-            return false;
-        }
-
-        updateAudioFd();
-        updateCameraResources();
-
-        if (m_output) {
-            m_output->exitFallback();
-            m_output->reconfigureSwapchain();
-            // 直接触发 frame 事件，让 Hyprland 开始渲染
-            m_output->events.frame.emit();
-            m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_CONNECTOR);
-        }
-
-        m_backend->events.pollFDsChanged.emit();
-        return true;
-    }
-
     for (int attempt = 0; attempt < 100; attempt++) {
         if (m_destroying) return false;
         if (try_exit_fallback(m_display) == 0) {
@@ -176,6 +150,8 @@ bool CAnlandBackend::tryConnect() {
             if (m_output) {
                 m_output->exitFallback();
                 m_output->reconfigureSwapchain();
+                // 直接触发 frame 事件，让 Hyprland 开始渲染
+                m_output->events.frame.emit();
                 m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_CONNECTOR);
             }
 
