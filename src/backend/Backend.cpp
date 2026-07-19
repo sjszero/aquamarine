@@ -31,9 +31,6 @@ using namespace Aquamarine;
  * 辅助函数
  * ============================================================ */
 
-/**
- * 时间戳增加纳秒
- */
 static void timespecAddNs(timespec* pTimespec, int64_t delta) {
     int delta_ns_low = delta % TIMESPEC_NSEC_PER_SEC;
     int delta_s_high = delta / TIMESPEC_NSEC_PER_SEC;
@@ -47,9 +44,6 @@ static void timespecAddNs(timespec* pTimespec, int64_t delta) {
     }
 }
 
-/**
- * 后端类型名称
- */
 static const char* backendTypeToName(eBackendType type) {
     switch (type) {
         case AQ_BACKEND_DRM:        return "drm";
@@ -64,21 +58,6 @@ static const char* backendTypeToName(eBackendType type) {
     return "invalid";
 }
 
-/**
- * 检查是否为 Anland 后端
- */
-static bool isAnlandBackend(eBackendType type) {
-#ifdef HAS_ANLAND_BACKEND
-    return type == AQ_BACKEND_ANLAND;
-#else
-    (void)type;
-    return false;
-#endif
-}
-
-/**
- * 检查是否有 Anland 后端实现
- */
 static bool hasAnlandImplementation(const std::vector<SP<IBackendImplementation>>& impls) {
 #ifdef HAS_ANLAND_BACKEND
     for (auto const& impl : impls) {
@@ -118,10 +97,8 @@ Aquamarine::CBackend::CBackend() {
 }
 
 Aquamarine::CBackend::~CBackend() {
-    if (idle.fd >= 0)
-        close(idle.fd);
-
-    // 先清除实现，再销毁 logger
+    // Tear down implementations before the logger is destroyed,
+    // as backends may log during teardown (e.g. SDRMConnector::disconnect).
     implementations.clear();
 }
 
@@ -148,8 +125,6 @@ Hyprutils::Memory::CSharedPointer<CBackend> Aquamarine::CBackend::create(
         return nullptr;
 
     backend->log(AQ_LOG_DEBUG, "Creating an Aquamarine backend!");
-
-    backend->idle.fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
 
     /* ============================================================
      * 构建有效后端列表（检测 ANLAND 环境变量）
@@ -254,6 +229,9 @@ Hyprutils::Memory::CSharedPointer<CBackend> Aquamarine::CBackend::create(
         backend->implementations.emplace_back(ref);
         ref->self = ref;
     }
+
+    // create a timerfd for idle events
+    backend->idle.fd = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC);
 
     return backend;
 }
@@ -406,8 +384,7 @@ std::vector<Hyprutils::Memory::CSharedPointer<SPollFD>> Aquamarine::CBackend::ge
     for (auto const& i : implementations) {
         auto pollfds = i->pollFDs();
         for (auto const& p : pollfds) {
-            log(AQ_LOG_DEBUG, std::format("backend: poll fd {} for implementation {}",
-                p->fd, backendTypeToName(i->type())));
+            log(AQ_LOG_DEBUG, std::format("backend: poll fd {} for implementation {}", p->fd, backendTypeToName(i->type())));
             result.emplace_back(p);
         }
     }
@@ -502,10 +479,13 @@ void Aquamarine::CBackend::removeIdleEvent(SP<std::function<void(void)>> pfn) {
 
 void Aquamarine::CBackend::updateIdleTimer() {
     uint64_t ADD_NS = idle.pending.empty() ? TIMESPEC_NSEC_PER_SEC * 240ULL : 0;
+
     timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     timespecAddNs(&now, ADD_NS);
+
     itimerspec ts = {.it_value = now};
+
     if (timerfd_settime(idle.fd, TFD_TIMER_ABSTIME, &ts, nullptr))
         log(AQ_LOG_ERROR, std::format("backend: failed to arm timerfd: {}", strerror(errno)));
 }

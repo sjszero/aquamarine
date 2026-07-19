@@ -1,6 +1,7 @@
 // src/backend/anland/AnlandBackend.cpp
 #include "AnlandBackend.hpp"
 #include "AnlandOutput.hpp"
+#include "AnlandAllocator.hpp"
 #include "AnlandPointer.hpp"
 #include "AnlandKeyboard.hpp"
 #include "AnlandTouch.hpp"
@@ -18,11 +19,9 @@ namespace Aquamarine {
 using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 
-// 辅助函数
 static uint32_t getCurrentTimeMs() {
     auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count();
+    return std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 }
 
 static void anland_fallback_callback(void* data) {
@@ -45,6 +44,7 @@ CAnlandBackend::~CAnlandBackend() {
         m_output->releaseBuffers();
         m_output.reset();
     }
+    m_allocator.reset();
     if (m_display) {
         disconnect(m_display);
         m_display = nullptr;
@@ -102,16 +102,20 @@ bool CAnlandBackend::tryConnect() {
             m_inFallback = false;
             ANLAND_LOG("consumer connected, exiting fallback (attempt %d)", attempt);
 
+            // Create allocator from dmabufs
+            m_allocator = CAnlandAllocator::create(m_display, this);
+            if (!m_allocator) {
+                ANLAND_ERR("Failed to create allocator");
+                enterFallback();
+                return false;
+            }
+
             updateAudioFd();
             updateCameraResources();
 
             if (m_output) {
-                int count = get_buf_count(m_display);
-                ANLAND_LOG("got %d dmabufs", count);
                 m_output->exitFallback();
-                if (count > 0) {
-                    m_output->importBuffers(count);
-                }
+                m_output->reconfigureSwapchain();
                 m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_CONNECTOR);
             }
 
@@ -131,8 +135,7 @@ void CAnlandBackend::onReady() {
 
     if (m_output && !m_inFallback) {
         m_output->exitFallback();
-        int count = m_display ? get_buf_count(m_display) : 0;
-        if (count > 0) m_output->importBuffers(count);
+        m_output->reconfigureSwapchain();
         m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_MONITOR);
     }
     ANLAND_LOG("onReady done: fallback=%d", m_inFallback);
@@ -146,6 +149,8 @@ void CAnlandBackend::onFallback() {
 
     anland_audio_set_fd(-1);
     anland_camera_clear();
+
+    m_allocator.reset();
 
     if (m_output) {
         m_output->enterFallback();
@@ -164,7 +169,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
 
     if (m_reconnectTimerFd < 0 && m_inFallback) setupReconnectTimer();
     if (m_reconnectTimerFd >= 0) {
-        auto pfd = Hyprutils::Memory::makeShared<SPollFD>();  // 修复：完整命名空间
+        auto pfd = Hyprutils::Memory::makeShared<SPollFD>();
         pfd->fd = m_reconnectTimerFd;
         pfd->onSignal = [weakSelf]() {
             auto self = weakSelf.lock();
@@ -178,7 +183,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
         int bufFd = get_buffer_ready_fd(m_display);
 
         if (dataFd >= 0) {
-            auto pfd = Hyprutils::Memory::makeShared<SPollFD>();  // 修复：完整命名空间
+            auto pfd = Hyprutils::Memory::makeShared<SPollFD>();
             pfd->fd = dataFd;
             pfd->onSignal = [weakSelf]() {
                 auto self = weakSelf.lock();
@@ -189,7 +194,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
         }
 
         if (bufFd >= 0) {
-            auto pfd = Hyprutils::Memory::makeShared<SPollFD>();  // 修复：完整命名空间
+            auto pfd = Hyprutils::Memory::makeShared<SPollFD>();
             pfd->fd = bufFd;
             pfd->onSignal = [weakSelf]() {
                 auto self = weakSelf.lock();
@@ -207,7 +212,7 @@ void CAnlandBackend::onReconnectTimerFd() {
     if (m_reconnectTimerFd < 0 || m_destroying) return;
     uint64_t expirations;
     ssize_t ret = read(m_reconnectTimerFd, &expirations, sizeof(expirations));
-    (void)ret;  // 修复 unused result 警告
+    (void)ret;
 
     if (m_inFallback && tryConnect()) {
         m_backend->events.pollFDsChanged.emit();
@@ -258,6 +263,7 @@ void CAnlandBackend::createOutputIfNeeded() {
     if (m_output->initialize(width, height, refresh)) {
         m_outputCreated = true;
         ANLAND_LOG("output created successfully");
+        // The swapchain will be reconfigured when we exit fallback
     } else {
         m_output.reset();
         ANLAND_ERR("output creation failed");
@@ -270,6 +276,12 @@ void CAnlandBackend::emitOutputIfReady() {
         m_outputEmitted = true;
         ANLAND_LOG("output emitted to Aquamarine");
     }
+}
+
+bool CAnlandBackend::createOutput(const std::string& name) {
+    (void)name;
+    createOutputIfNeeded();
+    return m_output != nullptr;
 }
 
 bool CAnlandBackend::dispatchEvents() {
@@ -395,12 +407,6 @@ void CAnlandBackend::updateCameraResources() {
     ANLAND_LOG("Camera resources requested");
 }
 
-bool CAnlandBackend::createOutput(const std::string& name) {
-    (void)name;
-    createOutputIfNeeded();
-    return m_output != nullptr;
-}
-
 std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     std::vector<SDRMFormat> formats;
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
@@ -422,6 +428,7 @@ void CAnlandBackend::shutdown() {
         m_output->releaseBuffers();
         m_output.reset();
     }
+    m_allocator.reset();
     if (m_display) {
         disconnect(m_display);
         m_display = nullptr;

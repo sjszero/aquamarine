@@ -24,6 +24,7 @@ class CAnlandOutput;
 class CAnlandPointer;
 class CAnlandKeyboard;
 class CAnlandTouch;
+class CAnlandAllocator;
 
 class CAnlandBackend : public IBackendImplementation {
 public:
@@ -43,14 +44,18 @@ public:
     virtual std::vector<SDRMFormat> getRenderFormats() override;
     virtual std::vector<SDRMFormat> getCursorFormats() override { return {}; }
     virtual bool createOutput(const std::string& name = "") override;
-    virtual CSharedPointer<IAllocator> preferredAllocator() override { return nullptr; }
-    virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override { return {}; }
+    virtual CSharedPointer<IAllocator> preferredAllocator() override { return m_allocator; }
+    virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override { 
+        if (m_allocator) return {m_allocator}; 
+        return {}; 
+    }
     virtual CWeakPointer<IBackendImplementation> getPrimary() override { return self; }
 
-    // 公共访问器
+    // Public accessors
     CSharedPointer<CBackend> getBackend() const { return m_backend; }
     display_ctx* display() { return m_display; }
     CSharedPointer<CAnlandOutput> getOutput() const { return m_output; }
+    CSharedPointer<CAnlandAllocator> getAllocator() const { return m_allocator; }
     bool isConnected() const { return m_display != nullptr && !m_inFallback; }
     bool isFallback() const { return m_inFallback; }
 
@@ -77,6 +82,7 @@ private:
     display_ctx* m_display = nullptr;
 
     CSharedPointer<CAnlandOutput> m_output;
+    CSharedPointer<CAnlandAllocator> m_allocator;
     CSharedPointer<CAnlandPointer> m_pointer;
     CSharedPointer<CAnlandKeyboard> m_keyboard;
     CSharedPointer<CAnlandTouch> m_touch;
@@ -102,4 +108,4 @@ private:
 
 } // namespace Aquamarine
 
-#endif // AQUAMARINE_ANLAND_BACKEND_HPP
+#endif
