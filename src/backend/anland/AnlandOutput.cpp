@@ -21,7 +21,6 @@ using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::Math::CRegion;
 
-// 全局 EGL 函数指针
 static PFNEGLCREATEIMAGEKHRPROC g_eglCreateImageKHR = nullptr;
 static PFNEGLDESTROYIMAGEKHRPROC g_eglDestroyImageKHR = nullptr;
 static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC g_glEGLImageTargetTexture2DOES = nullptr;
@@ -31,11 +30,9 @@ static bool initEGLFunctions() {
     if (g_eglFunctionsInitialized) {
         return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr;
     }
-    
     g_eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
     g_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
     g_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
-    
     g_eglFunctionsInitialized = true;
     return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr && g_glEGLImageTargetTexture2DOES != nullptr;
 }
@@ -89,7 +86,7 @@ bool CAnlandOutput::ensureEGLInitialized() {
     
     m_eglDisplay = eglGetCurrentDisplay();
     if (m_eglDisplay == EGL_NO_DISPLAY) {
-        ANLAND_ERR("ensureEGLInitialized: no current EGLDisplay");
+        ANLAND_TRACE("ensureEGLInitialized: no current EGLDisplay (will retry later)");
         return false;
     }
     
@@ -137,7 +134,6 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     m_outputReady = true;
     m_inFallback = true;
 
-    // KWin 风格：立即发送 frame 事件
     events.frame.emit();
     ANLAND_LOG("initialize: %dx%d @ %d mHz, output ready", width, height, refresh);
     return true;
@@ -175,8 +171,9 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
+    // 关键修复：如果 EGL 未初始化，返回 false 但保留状态，稍后重试
     if (!ensureEGLInitialized()) {
-        ANLAND_ERR("importBuffer: EGL not initialized");
+        ANLAND_TRACE("importBuffer: EGL not initialized, will retry later");
         return false;
     }
 
@@ -210,7 +207,6 @@ bool CAnlandOutput::importBuffer(int index) {
 
     ANLAND_TRACE("importBuffer: slot %d: %dx%d fd=%d", index, info.width, info.height, slot->fd);
 
-    // 创建 EGLImage
     uint32_t drmFmt = protocolFormatToDrm(info.format);
     EGLint attribs[50];
     int idx = 0;
@@ -314,8 +310,9 @@ void CAnlandOutput::destroyBuffer(int index) {
     slot->hasDamage = true;
 }
 
+// 关键修复：只记录缓冲区信息，不导入 EGL（上下文还未创建）
 void CAnlandOutput::importBuffers() {
-    ANLAND_TRACE("importBuffers START");
+    ANLAND_TRACE("importBuffers START (lazy: only record buffer info)");
     auto* dpy = display();
     if (!dpy || is_fallback(dpy)) {
         ANLAND_ERR("importBuffers: display not ready");
@@ -337,11 +334,38 @@ void CAnlandOutput::importBuffers() {
     }
 
     m_bufferCount = count;
+    
+    // 只记录 fd 信息，不导入 EGL
     for (int i = 0; i < count; i++) {
-        importBuffer(i);
+        int fd = get_dmabuf_fd_at(dpy, i);
+        if (fd < 0) {
+            ANLAND_ERR("importBuffers: get_dmabuf_fd_at failed for %d", i);
+            continue;
+        }
+        buf_info info;
+        if (get_dmabuf_info_at(dpy, i, &info) < 0) {
+            ANLAND_ERR("importBuffers: get_dmabuf_info_at failed for %d", i);
+            close(fd);
+            continue;
+        }
+        
+        auto* slot = &m_slots[i];
+        if (slot->fd >= 0) close(slot->fd);
+        slot->fd = dup(fd);
+        close(fd);
+        slot->width = info.width;
+        slot->height = info.height;
+        slot->format = info.format;
+        slot->modifier = info.modifier;
+        slot->offset = info.offset;
+        slot->stride = info.stride;
+        slot->imported = false;  // 延迟导入
+        
+        ANLAND_TRACE("importBuffers: recorded buffer %d: %dx%d fd=%d", i, info.width, info.height, slot->fd);
     }
+    
     m_buffersImported = true;
-    ANLAND_LOG("importBuffers: imported %d buffers", m_bufferCount);
+    ANLAND_LOG("importBuffers: recorded %d buffers (EGL import deferred)", m_bufferCount);
 }
 
 bool CAnlandOutput::test() {
@@ -351,10 +375,7 @@ bool CAnlandOutput::test() {
 
 bool CAnlandOutput::commit() {
     ANLAND_TRACE("commit START");
-    if (m_destroying) {
-        ANLAND_TRACE("commit: destroying, returning true");
-        return true;
-    }
+    if (m_destroying) return true;
 
     if (m_commitInProgress.exchange(true)) {
         ANLAND_TRACE("commit: already in progress");
@@ -363,14 +384,8 @@ bool CAnlandOutput::commit() {
 
     struct CommitGuard {
         std::atomic<bool>& flag;
-        ~CommitGuard() { 
-            ANLAND_TRACE("commit guard destructor");
-            flag = false; 
-        }
+        ~CommitGuard() { flag = false; }
     } guard(m_commitInProgress);
-
-    ANLAND_TRACE("commit: inFallback=%d, outputReady=%d, buffersImported=%d",
-                 m_inFallback, m_outputReady, m_buffersImported);
 
     if (m_inFallback || !m_outputReady) {
         ANLAND_LOG("commit: fallback/notready - immediate completion");
@@ -401,9 +416,9 @@ bool CAnlandOutput::commit() {
         return true;
     }
 
-    // 确保缓冲区已导入
+    // 确保缓冲区已记录
     if (!m_buffersImported) {
-        ANLAND_TRACE("commit: importing buffers");
+        ANLAND_TRACE("commit: recording buffers");
         importBuffers();
         if (!m_buffersImported) {
             ANLAND_LOG("commit: no buffers - immediate completion");
@@ -422,16 +437,16 @@ bool CAnlandOutput::commit() {
 
     // 获取当前缓冲区索引
     m_selectedIndex = get_selected_idx(dpy);
-    ANLAND_TRACE("commit: selected index=%d, bufferCount=%d", m_selectedIndex, m_bufferCount);
     if (m_selectedIndex >= m_bufferCount) {
         m_selectedIndex = 0;
     }
 
-    // 确保该槽位已导入
+    // 关键修复：在 commit 中导入 EGL（此时上下文已存在）
     if (!m_slots[m_selectedIndex].imported) {
-        ANLAND_TRACE("commit: importing buffer %d", m_selectedIndex);
+        ANLAND_TRACE("commit: importing EGL for buffer %d", m_selectedIndex);
         if (!importBuffer(m_selectedIndex)) {
-            ANLAND_LOG("commit: import failed - immediate completion");
+            ANLAND_ERR("commit: importBuffer failed for %d", m_selectedIndex);
+            // 即使导入失败也返回成功，让 Hyprland 继续
             m_framePending = false;
             events.present.emit(IOutput::SPresentEvent{
                 .presented = true,
@@ -445,15 +460,11 @@ bool CAnlandOutput::commit() {
         }
     }
 
-    // 设置缓冲区到状态
     auto& slot = m_slots[m_selectedIndex];
     state->setBuffer(slot.buffer);
     state->addDamage(CRegion(0, 0, (int)m_width, (int)m_height));
 
-    // 发送刷新信号给 Android
-    ANLAND_TRACE("commit: calling trigger_refresh");
     int ret = trigger_refresh(dpy);
-    ANLAND_TRACE("commit: trigger_refresh returned %d", ret);
     if (ret < 0) {
         ANLAND_ERR("commit: trigger_refresh failed");
         m_framePending = false;
@@ -471,16 +482,12 @@ bool CAnlandOutput::commit() {
     m_framePending = true;
     ANLAND_LOG("commit: frame pending");
     events.commit.emit();
-    ANLAND_TRACE("commit END");
     return true;
 }
 
 void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     ANLAND_TRACE("scheduleFrame: reason=%d", (int)reason);
-    if (m_destroying) {
-        ANLAND_TRACE("scheduleFrame: destroying, returning");
-        return;
-    }
+    if (m_destroying) return;
 
     if (m_inFallback || !m_outputReady) {
         ANLAND_TRACE("scheduleFrame: fallback - emitting immediate frame");
@@ -488,10 +495,7 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
         return;
     }
 
-    if (m_frameScheduled) {
-        ANLAND_TRACE("scheduleFrame: already scheduled");
-        return;
-    }
+    if (m_frameScheduled) return;
 
     m_frameScheduled = true;
     this->needsFrame = true;
@@ -500,7 +504,6 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
 
     if (!m_frameIdle) {
         m_frameIdle = makeShared<std::function<void(void)>>([this]() {
-            ANLAND_TRACE("scheduleFrame idle callback");
             m_frameScheduled = false;
             if (m_destroying || m_inFallback || !m_outputReady) return;
             events.frame.emit();
@@ -517,16 +520,12 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
 
 void CAnlandOutput::onBufferReady() {
     ANLAND_TRACE("onBufferReady START");
-    if (m_inFallback || m_destroying) {
-        ANLAND_TRACE("onBufferReady: fallback/destroying, returning");
-        return;
-    }
+    if (m_inFallback || m_destroying) return;
 
     m_frameScheduled = false;
 
     auto* dpy = display();
     if (!dpy || is_fallback(dpy)) {
-        ANLAND_LOG("onBufferReady: no display - immediate completion");
         m_framePending = false;
         events.present.emit(IOutput::SPresentEvent{
             .presented = true,
@@ -559,7 +558,6 @@ void CAnlandOutput::onBufferReady() {
     });
 
     this->needsFrame = false;
-    ANLAND_LOG("onBufferReady: done");
     ANLAND_TRACE("onBufferReady END");
 }
 
@@ -608,7 +606,7 @@ void CAnlandOutput::exitFallback() {
     m_frameScheduled = false;
     m_buffersImported = false;
 
-    // 重新导入缓冲区
+    // 只记录缓冲区信息，不导入 EGL
     importBuffers();
 
     scheduleFrame(AQ_SCHEDULE_NEW_CONNECTOR);
