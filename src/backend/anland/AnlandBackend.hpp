@@ -8,6 +8,9 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <fcntl.h>
+#include <unistd.h>
+#include <xf86drm.h>
 
 extern "C" {
 #include "display_producer.h"
@@ -24,6 +27,7 @@ class CAnlandOutput;
 class CAnlandPointer;
 class CAnlandKeyboard;
 class CAnlandTouch;
+class CAnlandAllocator;
 
 class CAnlandBackend : public IBackendImplementation {
 public:
@@ -31,31 +35,27 @@ public:
                    const std::string& socketPath = "/run/display.sock");
     virtual ~CAnlandBackend();
 
-    // IBackendImplementation
+    // IBackendImplementation - 假装是标准 DRM 后端
     virtual eBackendType type() override { return AQ_BACKEND_ANLAND; }
     virtual bool start() override;
     virtual std::vector<CSharedPointer<SPollFD>> pollFDs() override;
-    virtual int drmFD() override { return -1; }
-    virtual int drmRenderNodeFD() override { return -1; }
+    virtual int drmFD() override { return m_dummyDRMFD; }
+    virtual int drmRenderNodeFD() override { return m_dummyDRMFD; }
     virtual bool dispatchEvents() override;
     virtual uint32_t capabilities() override { return AQ_BACKEND_CAPABILITY_POINTER; }
     virtual void onReady() override;
     virtual std::vector<SDRMFormat> getRenderFormats() override;
     virtual std::vector<SDRMFormat> getCursorFormats() override { return {}; }
     virtual bool createOutput(const std::string& name = "") override;
-    virtual CSharedPointer<IAllocator> preferredAllocator() override { 
-        return m_allocator; 
-    }
-    virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override { 
+    virtual CSharedPointer<IAllocator> preferredAllocator() override { return m_allocator; }
+    virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override {
         std::vector<CSharedPointer<IAllocator>> result;
-        if (m_allocator) {
-            result.push_back(m_allocator);
-        }
+        if (m_allocator) result.push_back(m_allocator);
         return result;
     }
     virtual CWeakPointer<IBackendImplementation> getPrimary() override { return self; }
 
-    // Public accessors
+    // 公共访问器
     CSharedPointer<CBackend> getBackend() const { return m_backend; }
     display_ctx* display() { return m_display; }
     CSharedPointer<CAnlandOutput> getOutput() const { return m_output; }
@@ -65,7 +65,6 @@ public:
 
     void onFallback();
     void enterFallback();
-    void onOutputChanged();
     void shutdown();
 
     CWeakPointer<CAnlandBackend> self;
@@ -82,9 +81,15 @@ private:
     void updateAudioFd();
     void updateCameraResources();
 
+    // 打开"假" DRM 设备用于 EGL 初始化
+    int openDummyDRM();
+
     CSharedPointer<CBackend> m_backend;
     std::string m_socketPath;
     display_ctx* m_display = nullptr;
+
+    // 假的 DRM FD - 只用于 EGL 初始化，不用于 KMS
+    int m_dummyDRMFD = -1;
 
     CSharedPointer<CAnlandOutput> m_output;
     CSharedPointer<IAllocator> m_allocator;

@@ -10,6 +10,7 @@ namespace Aquamarine {
 
 class CAnlandAllocator;
 
+// 假装是 GBM 分配的 buffer，实际上包装 Android 的 dmabuf
 class CAnlandBuffer : public IBuffer {
 public:
     CAnlandBuffer(int fd, const buf_info& info, CAnlandAllocator* allocator);
@@ -26,7 +27,6 @@ public:
     virtual std::tuple<uint8_t*, uint32_t, size_t> beginDataPtr(uint32_t flags) override { return {nullptr, 0, 0}; }
     virtual void endDataPtr() override {}
 
-    // Mark buffer as in use (displayed/committed)
     bool inUse = false;
 
 private:

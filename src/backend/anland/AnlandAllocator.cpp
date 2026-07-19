@@ -68,6 +68,7 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
     if (m_buffers.empty())
         return nullptr;
 
+    // 轮询获取下一个缓冲区
     int next = (m_lastAcquired + 1) % m_buffers.size();
     int attempts = 0;
     while (attempts < (int)m_buffers.size()) {
@@ -80,6 +81,7 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
         next = (next + 1) % m_buffers.size();
         attempts++;
     }
+    // 如果全部在用，返回第一个
     auto b = m_buffers[next].lock();
     if (b) {
         b->inUse = true;

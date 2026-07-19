@@ -17,19 +17,20 @@ using Hyprutils::Memory::CWeakPointer;
 class CAnlandBackend;
 class CAnlandBuffer;
 
+// 假装是 GBM 分配器，实际上从 Android 获取 dmabuf
 class CAnlandAllocator : public IAllocator {
 public:
     static CSharedPointer<IAllocator> create(display_ctx* display, CAnlandBackend* backend);
     virtual ~CAnlandAllocator();
 
-    // IAllocator overrides
+    // IAllocator overrides - 假装是 GBM
     virtual CSharedPointer<IBuffer> acquire(const SAllocatorBufferParams& params, CSharedPointer<CSwapchain> swapchain_) override;
     virtual CSharedPointer<CBackend> getBackend() override;
     virtual int drmFD() override { return -1; }
-    virtual eAllocatorType type() override { return AQ_ALLOCATOR_TYPE_ANLAND; }
+    virtual eAllocatorType type() override { return AQ_ALLOCATOR_TYPE_GBM; } // 假装是 GBM！
     virtual void destroyBuffers() override;
 
-    // Import buffers from display
+    // 从 display 导入 Android 的 dmabuf
     bool importBuffers();
     int bufferCount() const { return m_bufferCount; }
     display_ctx* getDisplay() const { return m_display; }

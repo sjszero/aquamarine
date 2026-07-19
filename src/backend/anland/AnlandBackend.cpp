@@ -10,6 +10,7 @@
 #include <fcntl.h>
 #include <cstdio>
 #include <chrono>
+#include <xf86drm.h>
 
 #define ANLAND_LOG(fmt, ...) fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__)
 #define ANLAND_ERR(fmt, ...) fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__)
@@ -29,9 +30,38 @@ static void anland_fallback_callback(void* data) {
     if (backend) backend->onFallback();
 }
 
+int CAnlandBackend::openDummyDRM() {
+    // 策略：尝试多个可能的 DRM 节点，找到第一个可用的
+    const char* paths[] = {
+        "/dev/dri/renderD128",
+        "/dev/dri/renderD129",
+        "/dev/dri/card0",
+        "/dev/dri/card1",
+        nullptr
+    };
+
+    for (int i = 0; paths[i] != nullptr; i++) {
+        int fd = open(paths[i], O_RDWR | O_CLOEXEC);
+        if (fd >= 0) {
+            // 验证是否真的是 DRM 设备
+            drmVersion* ver = drmGetVersion(fd);
+            if (ver) {
+                drmFreeVersion(ver);
+                ANLAND_LOG("Opened dummy DRM device: %s (fd=%d)", paths[i], fd);
+                return fd;
+            }
+            close(fd);
+        }
+    }
+
+    ANLAND_ERR("Failed to open any DRM device for EGL initialization");
+    return -1;
+}
+
 CAnlandBackend::CAnlandBackend(CSharedPointer<CBackend> backend, const std::string& socketPath)
     : m_backend(backend), m_socketPath(socketPath) {
     ANLAND_LOG("CAnlandBackend constructed, socket: %s", socketPath.c_str());
+    m_dummyDRMFD = openDummyDRM();
 }
 
 CAnlandBackend::~CAnlandBackend() {
@@ -48,6 +78,10 @@ CAnlandBackend::~CAnlandBackend() {
     if (m_display) {
         disconnect(m_display);
         m_display = nullptr;
+    }
+    if (m_dummyDRMFD >= 0) {
+        close(m_dummyDRMFD);
+        m_dummyDRMFD = -1;
     }
     ANLAND_LOG("CAnlandBackend destroyed");
 }
@@ -102,7 +136,7 @@ bool CAnlandBackend::tryConnect() {
             m_inFallback = false;
             ANLAND_LOG("consumer connected, exiting fallback (attempt %d)", attempt);
 
-            // Create allocator from dmabufs
+            // 创建分配器 - 从 Android 获取 dmabuf
             m_allocator = CAnlandAllocator::create(m_display, this);
             if (!m_allocator) {
                 ANLAND_ERR("Failed to create allocator");
@@ -141,11 +175,12 @@ void CAnlandBackend::onReady() {
     ANLAND_LOG("onReady done: fallback=%d", m_inFallback);
 }
 
-void CAnlandBackend::onFallback() {
-    if (m_destroying || m_inFallback) return;
+void CAnlandBackend::enterFallback() {
+    if (m_inFallback || m_destroying) return;
+    ANLAND_LOG("enterFallback: manually entering fallback");
+
     m_inFallback = true;
     m_outputEmitted = false;
-    ANLAND_LOG("entered fallback (consumer disconnected)");
 
     anland_audio_set_fd(-1);
     anland_camera_clear();
@@ -161,26 +196,10 @@ void CAnlandBackend::onFallback() {
     m_backend->events.pollFDsChanged.emit();
 }
 
-void CAnlandBackend::enterFallback() {
-    if (m_inFallback || m_destroying) return;
-    
-    ANLAND_LOG("enterFallback: manually entering fallback");
-    
-    m_inFallback = true;
-    m_outputEmitted = false;
-    
-    anland_audio_set_fd(-1);
-    anland_camera_clear();
-    
-    m_allocator.reset();
-    
-    if (m_output) {
-        m_output->enterFallback();
-        m_output->releaseBuffers();
-    }
-    
-    setupReconnectTimer();
-    m_backend->events.pollFDsChanged.emit();
+void CAnlandBackend::onFallback() {
+    if (m_destroying || m_inFallback) return;
+    ANLAND_LOG("entered fallback (consumer disconnected)");
+    enterFallback();
 }
 
 std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
@@ -261,7 +280,6 @@ void CAnlandBackend::setupReconnectTimer() {
         .it_value = { .tv_sec = 0, .tv_nsec = 100000000 }
     };
     timerfd_settime(m_reconnectTimerFd, 0, &ts, nullptr);
-    ANLAND_LOG("Reconnect timer armed on fd %d", m_reconnectTimerFd);
 }
 
 void CAnlandBackend::teardownReconnectTimer() {
@@ -285,7 +303,6 @@ void CAnlandBackend::createOutputIfNeeded() {
     if (m_output->initialize(width, height, refresh)) {
         m_outputCreated = true;
         ANLAND_LOG("output created successfully");
-        // The swapchain will be reconfigured when we exit fallback
     } else {
         m_output.reset();
         ANLAND_ERR("output creation failed");
@@ -430,6 +447,8 @@ void CAnlandBackend::updateCameraResources() {
 }
 
 std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
+    // 返回标准格式，让 Hyprland 以为我们支持这些格式
+    // 实际上这些格式由 Android 端决定
     std::vector<SDRMFormat> formats;
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
@@ -454,6 +473,10 @@ void CAnlandBackend::shutdown() {
     if (m_display) {
         disconnect(m_display);
         m_display = nullptr;
+    }
+    if (m_dummyDRMFD >= 0) {
+        close(m_dummyDRMFD);
+        m_dummyDRMFD = -1;
     }
     anland_audio_stop();
     anland_camera_stop();

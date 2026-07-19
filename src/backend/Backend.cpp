@@ -134,22 +134,21 @@ Hyprutils::Memory::CSharedPointer<CBackend> Aquamarine::CBackend::create(
 #ifdef HAS_ANLAND_BACKEND
     const char* anlandEnv = getenv("ANLAND");
     if (anlandEnv && strcmp(anlandEnv, "1") == 0) {
-        backend->log(AQ_LOG_DEBUG, "ANLAND=1 detected, Anland backend will be primary");
+        backend->log(AQ_LOG_DEBUG, "ANLAND=1 detected: Anland backend only");
 
-        // Anland 作为强制后端
+        // 只创建 Anland 后端
         SBackendImplementationOptions anlandOpt;
         anlandOpt.backendType = AQ_BACKEND_ANLAND;
         anlandOpt.backendRequestMode = AQ_BACKEND_REQUEST_MANDATORY;
         effectiveBackends.push_back(anlandOpt);
 
-        // 其他后端作为 fallback
-        for (const auto& b : backends) {
-            if (b.backendType != AQ_BACKEND_ANLAND) {
-                SBackendImplementationOptions fallbackOpt = b;
-                fallbackOpt.backendRequestMode = AQ_BACKEND_REQUEST_FALLBACK;
-                effectiveBackends.push_back(fallbackOpt);
-            }
-        }
+        // 添加 Headless 作为 fallback（当消费者断开时）
+        SBackendImplementationOptions headlessOpt;
+        headlessOpt.backendType = AQ_BACKEND_HEADLESS;
+        headlessOpt.backendRequestMode = AQ_BACKEND_REQUEST_FALLBACK;
+        effectiveBackends.push_back(headlessOpt);
+
+        // 不添加 DRM/Wayland 后端
     } else {
         effectiveBackends = backends;
     }

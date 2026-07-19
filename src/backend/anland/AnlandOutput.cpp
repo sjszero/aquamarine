@@ -99,7 +99,10 @@ void CAnlandOutput::reconfigureSwapchain() {
     if (m_destroying || m_inFallback || !m_outputReady) return;
 
     auto alloc = m_backend ? m_backend->getAllocator() : nullptr;
-    if (!alloc) return;
+    if (!alloc) {
+        ANLAND_ERR("reconfigureSwapchain: no allocator");
+        return;
+    }
 
     auto mode = state->state().mode.lock();
     if (!mode) mode = state->state().customMode;
@@ -127,8 +130,7 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
-    ANLAND_LOG("reconfigureSwapchain: %dx%d, format=0x%x", 
-        (int)opts.size.x, (int)opts.size.y, opts.format);
+    ANLAND_LOG("reconfigureSwapchain: %dx%d", (int)opts.size.x, (int)opts.size.y);
 }
 
 CSharedPointer<IBackendImplementation> CAnlandOutput::getBackend() {
@@ -143,22 +145,18 @@ std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
 bool CAnlandOutput::test() {
     auto* dpy = display();
     if (!dpy || is_fallback(dpy)) {
-        ANLAND_ERR("test: display not ready");
         return false;
     }
-
     if (!m_swapchain) {
         reconfigureSwapchain();
         if (!m_swapchain) return false;
     }
-
     return true;
 }
 
 bool CAnlandOutput::commit() {
     if (m_destroying) return true;
     if (m_commitInProgress.exchange(true)) {
-        ANLAND_LOG("commit: already in progress");
         return false;
     }
 
@@ -168,13 +166,11 @@ bool CAnlandOutput::commit() {
     } guard(m_commitInProgress);
 
     if (m_inFallback || !m_outputReady) {
-        ANLAND_LOG("commit: fallback or not ready");
         return true;
     }
 
     auto* dpy = display();
     if (!dpy || is_fallback(dpy)) {
-        ANLAND_LOG("commit: no display or fallback");
         return true;
     }
 
@@ -202,22 +198,13 @@ bool CAnlandOutput::commit() {
     }
 
     m_framePending = true;
-    ANLAND_LOG("commit: frame pending");
-
     events.commit.emit();
     return true;
 }
 
 void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
-    ANLAND_LOG("scheduleFrame: reason=%d", (int)reason);
-
-    if (m_destroying || m_inFallback || !m_outputReady) {
-        return;
-    }
-
-    if (m_frameScheduled) {
-        return;
-    }
+    if (m_destroying || m_inFallback || !m_outputReady) return;
+    if (m_frameScheduled) return;
 
     m_frameScheduled = true;
     m_needsFrame = true;
@@ -225,10 +212,7 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     if (!m_frameIdle) {
         m_frameIdle = Hyprutils::Memory::makeShared<std::function<void(void)>>([this]() {
             m_frameScheduled = false;
-            if (m_destroying || m_inFallback || !m_outputReady) {
-                return;
-            }
-            ANLAND_LOG("scheduleFrame idle: emitting frame");
+            if (m_destroying || m_inFallback || !m_outputReady) return;
             events.frame.emit();
         });
     }
@@ -237,16 +221,13 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     if (backend) {
         backend->addIdleEvent(m_frameIdle);
     } else {
-        ANLAND_LOG("scheduleFrame: no backend, emitting directly");
         events.frame.emit();
         m_frameScheduled = false;
     }
 }
 
 void CAnlandOutput::onBufferReady() {
-    if (m_inFallback || m_destroying) {
-        return;
-    }
+    if (m_inFallback || m_destroying) return;
 
     m_frameScheduled = false;
 
@@ -274,7 +255,6 @@ void CAnlandOutput::onBufferReady() {
     });
 
     m_needsFrame = false;
-    ANLAND_LOG("onBufferReady: done");
 }
 
 void CAnlandOutput::enterFallback() {
@@ -295,8 +275,6 @@ void CAnlandOutput::enterFallback() {
         }
         m_frameIdle = nullptr;
     }
-
-    ANLAND_LOG("enterFallback: done");
 }
 
 void CAnlandOutput::exitFallback() {
@@ -311,10 +289,8 @@ void CAnlandOutput::exitFallback() {
     m_frameScheduled = false;
 
     reconfigureSwapchain();
-
     scheduleFrame(AQ_SCHEDULE_NEW_CONNECTOR);
     events.frame.emit();
-    ANLAND_LOG("exitFallback: done");
 }
 
 } // namespace Aquamarine
