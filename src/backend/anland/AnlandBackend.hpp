@@ -46,14 +46,12 @@ public:
     virtual bool createOutput(const std::string& name = "") override;
     virtual CSharedPointer<IAllocator> preferredAllocator() override { 
         if (!m_allocator) return nullptr;
-        // 使用 CSharedPointer 的构造函数进行显式转换
-        return CSharedPointer<IAllocator>(m_allocator);
+        return CSharedPointer<IAllocator>(m_allocator.get());
     }
     virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override { 
         std::vector<CSharedPointer<IAllocator>> result;
         if (m_allocator) {
-            // 使用 CSharedPointer 的构造函数进行显式转换
-            result.push_back(CSharedPointer<IAllocator>(m_allocator));
+            result.emplace_back(m_allocator.get());
         }
         return result;
     }
