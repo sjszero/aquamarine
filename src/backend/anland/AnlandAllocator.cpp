@@ -17,12 +17,15 @@ CAnlandAllocator::~CAnlandAllocator() {
     destroyBuffers();
 }
 
-SP<CAnlandAllocator> CAnlandAllocator::create(display_ctx* display, CAnlandBackend* backend) {
-    auto alloc = SP<CAnlandAllocator>(new CAnlandAllocator(display, backend));
+CSharedPointer<IAllocator> CAnlandAllocator::create(display_ctx* display, CAnlandBackend* backend) {
+    auto alloc = new CAnlandAllocator(display, backend);
     if (!alloc->importBuffers()) {
+        delete alloc;
         return nullptr;
     }
-    return alloc;
+    alloc->m_good = true;
+    // 使用 static_cast 将派生类指针转换为基类指针，然后构造 CSharedPointer
+    return CSharedPointer<IAllocator>(static_cast<IAllocator*>(alloc));
 }
 
 bool CAnlandAllocator::importBuffers() {
@@ -44,11 +47,11 @@ bool CAnlandAllocator::importBuffers() {
             close(fd);
             continue;
         }
-        auto buf = SP<CAnlandBuffer>(new CAnlandBuffer(fd, info, this));
+        auto buf = CSharedPointer<CAnlandBuffer>(new CAnlandBuffer(fd, info, this));
         if (buf->good()) {
             m_buffers.emplace_back(buf);
         }
-        close(fd);
+        // 不要 close(fd)，CAnlandBuffer 已经 dup 了
     }
     m_bufferCount = m_buffers.size();
     return m_bufferCount > 0;
@@ -61,7 +64,7 @@ void CAnlandAllocator::destroyBuffers() {
     m_lastAcquired = -1;
 }
 
-SP<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& params, SP<CSwapchain> swapchain_) {
+CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& params, CSharedPointer<CSwapchain> swapchain_) {
     (void)params;
     (void)swapchain_;
     std::lock_guard<std::mutex> lock(m_mutex);
@@ -75,7 +78,7 @@ SP<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& params, SP<C
         if (b && !b->inUse) {
             b->inUse = true;
             m_lastAcquired = next;
-            return b;
+            return std::static_pointer_cast<IBuffer>(b);
         }
         next = (next + 1) % m_buffers.size();
         attempts++;
@@ -85,12 +88,12 @@ SP<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& params, SP<C
     if (b) {
         b->inUse = true;
         m_lastAcquired = next;
-        return b;
+        return std::static_pointer_cast<IBuffer>(b);
     }
     return nullptr;
 }
 
-SP<CBackend> CAnlandAllocator::getBackend() {
+CSharedPointer<CBackend> CAnlandAllocator::getBackend() {
     return m_backend ? m_backend->getBackend() : nullptr;
 }
 
