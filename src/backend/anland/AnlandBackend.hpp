@@ -27,7 +27,6 @@ class CAnlandOutput;
 class CAnlandPointer;
 class CAnlandKeyboard;
 class CAnlandTouch;
-class CAnlandAllocator;
 
 class CAnlandBackend : public IBackendImplementation {
 public:
@@ -35,7 +34,7 @@ public:
                    const std::string& socketPath = "/run/display.sock");
     virtual ~CAnlandBackend();
 
-    // IBackendImplementation - 假装是标准 DRM 后端
+    // IBackendImplementation
     virtual eBackendType type() override { return AQ_BACKEND_ANLAND; }
     virtual bool start() override;
     virtual std::vector<CSharedPointer<SPollFD>> pollFDs() override;
@@ -47,19 +46,14 @@ public:
     virtual std::vector<SDRMFormat> getRenderFormats() override;
     virtual std::vector<SDRMFormat> getCursorFormats() override { return {}; }
     virtual bool createOutput(const std::string& name = "") override;
-    virtual CSharedPointer<IAllocator> preferredAllocator() override { return m_allocator; }
-    virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override {
-        std::vector<CSharedPointer<IAllocator>> result;
-        if (m_allocator) result.push_back(m_allocator);
-        return result;
-    }
+    virtual CSharedPointer<IAllocator> preferredAllocator() override { return nullptr; }
+    virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override { return {}; }
     virtual CWeakPointer<IBackendImplementation> getPrimary() override { return self; }
 
-    // 公共访问器
+    // Public accessors
     CSharedPointer<CBackend> getBackend() const { return m_backend; }
     display_ctx* display() { return m_display; }
     CSharedPointer<CAnlandOutput> getOutput() const { return m_output; }
-    CSharedPointer<IAllocator> getAllocator() const { return m_allocator; }
     bool isConnected() const { return m_display != nullptr && !m_inFallback; }
     bool isFallback() const { return m_inFallback; }
 
@@ -81,18 +75,15 @@ private:
     void updateAudioFd();
     void updateCameraResources();
 
-    // 打开"假" DRM 设备用于 EGL 初始化
     int openDummyDRM();
 
     CSharedPointer<CBackend> m_backend;
     std::string m_socketPath;
     display_ctx* m_display = nullptr;
 
-    // 假的 DRM FD - 只用于 EGL 初始化，不用于 KMS
     int m_dummyDRMFD = -1;
 
     CSharedPointer<CAnlandOutput> m_output;
-    CSharedPointer<IAllocator> m_allocator;
     CSharedPointer<CAnlandPointer> m_pointer;
     CSharedPointer<CAnlandKeyboard> m_keyboard;
     CSharedPointer<CAnlandTouch> m_touch;

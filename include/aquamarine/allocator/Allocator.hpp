@@ -1,4 +1,3 @@
-// include/aquamarine/allocator/Allocator.hpp
 #pragma once
 
 #include <hyprutils/memory/SharedPtr.hpp>
@@ -18,7 +17,6 @@ namespace Aquamarine {
     enum eAllocatorType {
         AQ_ALLOCATOR_TYPE_GBM = 0,
         AQ_ALLOCATOR_TYPE_DRM_DUMB,
-        AQ_ALLOCATOR_TYPE_ANLAND,      // Anland 自定义分配器
     };
 
     class IAllocator {

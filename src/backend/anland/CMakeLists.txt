@@ -4,7 +4,6 @@ target_sources(aquamarine PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/AnlandBackend.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/AnlandOutput.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/AnlandBuffer.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/AnlandAllocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/AnlandPointer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/AnlandKeyboard.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/AnlandTouch.cpp

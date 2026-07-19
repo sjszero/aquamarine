@@ -1,7 +1,6 @@
 // src/backend/anland/AnlandBackend.cpp
 #include "AnlandBackend.hpp"
 #include "AnlandOutput.hpp"
-#include "AnlandAllocator.hpp"
 #include "AnlandPointer.hpp"
 #include "AnlandKeyboard.hpp"
 #include "AnlandTouch.hpp"
@@ -12,9 +11,9 @@
 #include <chrono>
 #include <xf86drm.h>
 
-#define ANLAND_LOG(fmt, ...) fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__)
-#define ANLAND_ERR(fmt, ...) fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__)
-#define ANLAND_TRACE(fmt, ...) fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__)
+#define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
 namespace Aquamarine {
 
@@ -73,7 +72,6 @@ CAnlandBackend::~CAnlandBackend() {
         m_output->releaseBuffers();
         m_output.reset();
     }
-    m_allocator.reset();
     if (m_display) {
         disconnect(m_display);
         m_display = nullptr;
@@ -95,7 +93,6 @@ bool CAnlandBackend::start() {
     anland_audio_start();
     anland_camera_start();
 
-    // 先创建输出，再尝试连接
     createOutputIfNeeded();
     emitOutputIfReady();
 
@@ -110,11 +107,8 @@ bool CAnlandBackend::start() {
 }
 
 bool CAnlandBackend::tryConnect() {
-    ANLAND_TRACE("CAnlandBackend::tryConnect START");
-    if (m_destroying) {
-        ANLAND_TRACE("tryConnect: destroying, returning false");
-        return false;
-    }
+    ANLAND_TRACE("tryConnect START");
+    if (m_destroying) return false;
     std::lock_guard<std::mutex> lock(m_connectMutex);
 
     if (!m_display) {
@@ -137,65 +131,33 @@ bool CAnlandBackend::tryConnect() {
         ANLAND_LOG("connected to daemon: %dx%d @ %d mHz", width, height, refresh);
     }
 
-    // 确保输出已创建
     createOutputIfNeeded();
 
     for (int attempt = 0; attempt < 100; attempt++) {
         ANLAND_TRACE("tryConnect: attempt %d", attempt);
-        if (m_destroying) {
-            ANLAND_TRACE("tryConnect: destroying, returning false");
-            return false;
-        }
+        if (m_destroying) return false;
         if (try_exit_fallback(m_display) == 0) {
             m_inFallback = false;
             ANLAND_LOG("consumer connected, exiting fallback (attempt %d)", attempt);
 
-            ANLAND_TRACE("tryConnect: creating allocator");
-            m_allocator = CAnlandAllocator::create(m_display, this);
-            if (!m_allocator) {
-                ANLAND_ERR("Failed to create allocator");
-                enterFallback();
-                return false;
-            }
-            ANLAND_TRACE("tryConnect: allocator created");
-
-            ANLAND_TRACE("tryConnect: updating audio fd");
             updateAudioFd();
-            ANLAND_TRACE("tryConnect: updating camera resources");
             updateCameraResources();
 
             if (m_output) {
-                ANLAND_TRACE("tryConnect: output exists, exiting fallback");
+                ANLAND_TRACE("tryConnect: exiting fallback on output");
                 m_output->exitFallback();
-                ANLAND_TRACE("tryConnect: reconfiguring swapchain");
-                m_output->reconfigureSwapchain();
-
-                // 强制触发 frame 事件
                 ANLAND_TRACE("tryConnect: emitting frame event");
                 m_output->events.frame.emit();
-
-                // 触发 present 事件，使用正确的标志
-                // SPresentEvent 的 flags 可以使用 IOutput::AQ_OUTPUT_PRESENT_VSYNC
-                ANLAND_TRACE("tryConnect: emitting present event");
-                m_output->events.present.emit(IOutput::SPresentEvent{
-                    .presented = true,
-                    .when = nullptr,
-                    .seq = 0,
-                    .refresh = (int)m_screenRefresh,
-                    .flags = IOutput::AQ_OUTPUT_PRESENT_VSYNC
-                });
-
+                ANLAND_TRACE("tryConnect: scheduling frame");
                 m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_CONNECTOR);
             }
 
-            ANLAND_TRACE("tryConnect: emitting pollFDsChanged");
             m_backend->events.pollFDsChanged.emit();
             return true;
         }
         struct timespec ts = {0, 100000000};
         nanosleep(&ts, nullptr);
     }
-    ANLAND_TRACE("tryConnect: all attempts failed, returning false");
     return false;
 }
 
@@ -206,7 +168,6 @@ void CAnlandBackend::onReady() {
 
     if (m_output && !m_inFallback) {
         m_output->exitFallback();
-        m_output->reconfigureSwapchain();
         m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_MONITOR);
         m_output->events.frame.emit();
     }
@@ -222,8 +183,6 @@ void CAnlandBackend::enterFallback() {
 
     anland_audio_set_fd(-1);
     anland_camera_clear();
-
-    m_allocator.reset();
 
     if (m_output) {
         m_output->enterFallback();
@@ -248,7 +207,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
 
     if (m_reconnectTimerFd < 0 && m_inFallback) setupReconnectTimer();
     if (m_reconnectTimerFd >= 0) {
-        auto pfd = Hyprutils::Memory::makeShared<SPollFD>();
+        auto pfd = makeShared<SPollFD>();
         pfd->fd = m_reconnectTimerFd;
         pfd->onSignal = [weakSelf]() {
             auto self = weakSelf.lock();
@@ -262,7 +221,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
         int bufFd = get_buffer_ready_fd(m_display);
 
         if (dataFd >= 0) {
-            auto pfd = Hyprutils::Memory::makeShared<SPollFD>();
+            auto pfd = makeShared<SPollFD>();
             pfd->fd = dataFd;
             pfd->onSignal = [weakSelf]() {
                 auto self = weakSelf.lock();
@@ -273,7 +232,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
         }
 
         if (bufFd >= 0) {
-            auto pfd = Hyprutils::Memory::makeShared<SPollFD>();
+            auto pfd = makeShared<SPollFD>();
             pfd->fd = bufFd;
             pfd->onSignal = [weakSelf]() {
                 auto self = weakSelf.lock();
@@ -440,17 +399,15 @@ void CAnlandBackend::handleInputEvent(const InputEvent& ev) {
             break;
         }
 
-        case INPUT_TYPE_TOUCH_FRAME: {
+        case INPUT_TYPE_TOUCH_FRAME:
             if (m_touch) m_touch->emitFrame();
             break;
-        }
 
-        case INPUT_TYPE_DISPLAY_REFRESH: {
+        case INPUT_TYPE_DISPLAY_REFRESH:
             if (m_output) {
                 m_output->updateRefreshRate(ev.display.refresh_mhz);
             }
             break;
-        }
 
         default:
             break;
@@ -505,7 +462,6 @@ void CAnlandBackend::shutdown() {
         m_output->releaseBuffers();
         m_output.reset();
     }
-    m_allocator.reset();
     if (m_display) {
         disconnect(m_display);
         m_display = nullptr;
