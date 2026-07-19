@@ -373,7 +373,6 @@ bool CAnlandOutput::commit() {
             events.commit.emit();
             return true;
         }
-        // 导入后重新配置 swapchain
         reconfigureSwapchain();
     }
 
@@ -574,6 +573,11 @@ void CAnlandOutput::exitFallback() {
 CSharedPointer<CAnlandDmaBuffer> CAnlandOutput::getBuffer(int index) const {
     if (index < 0 || index >= m_bufferCount) return nullptr;
     return m_slots[index].buffer;
+}
+
+CSharedPointer<CBackend> CAnlandOutput::getCBackend() const {
+    if (!m_backend) return nullptr;
+    return m_backend->getBackend();
 }
 
 CSharedPointer<IBackendImplementation> CAnlandOutput::getBackend() {

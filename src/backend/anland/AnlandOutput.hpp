@@ -65,9 +65,7 @@ public:
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
 
     // 用于 CAnlandAllocator::getBackend()
-    CSharedPointer<CBackend> getCBackend() const {
-        return m_backend ? m_backend->getBackend() : nullptr;
-    }
+    CSharedPointer<CBackend> getCBackend() const;
 
     display_ctx* display();
     uint32_t getWidth() const { return m_width; }
