@@ -4,6 +4,7 @@
 
 #include <aquamarine/allocator/Allocator.hpp>
 #include <hyprutils/memory/SharedPtr.hpp>
+#include <hyprutils/memory/WeakPtr.hpp>
 #include <vector>
 #include <mutex>
 #include "display_producer.h"
@@ -11,6 +12,7 @@
 namespace Aquamarine {
 
 using Hyprutils::Memory::CSharedPointer;
+using Hyprutils::Memory::CWeakPointer;
 
 class CAnlandBackend;
 class CAnlandBuffer;
@@ -24,7 +26,7 @@ public:
     virtual CSharedPointer<IBuffer> acquire(const SAllocatorBufferParams& params, CSharedPointer<CSwapchain> swapchain_) override;
     virtual CSharedPointer<CBackend> getBackend() override;
     virtual int drmFD() override { return -1; }
-    virtual eAllocatorType type() override { return AQ_ALLOCATOR_TYPE_MISC; }
+    virtual eAllocatorType type() override { return AQ_ALLOCATOR_TYPE_NONE; }
     virtual void destroyBuffers() override;
 
     // Import buffers from display
@@ -34,7 +36,6 @@ public:
 
 private:
     CAnlandAllocator(display_ctx* display, CAnlandBackend* backend);
-    bool m_good = false;
 
     display_ctx* m_display = nullptr;
     CAnlandBackend* m_backend = nullptr;

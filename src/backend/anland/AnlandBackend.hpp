@@ -64,6 +64,7 @@ public:
     bool isFallback() const { return m_inFallback; }
 
     void onFallback();
+    void enterFallback();
     void onOutputChanged();
     void shutdown();
 

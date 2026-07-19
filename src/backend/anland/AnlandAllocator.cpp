@@ -23,8 +23,6 @@ CSharedPointer<IAllocator> CAnlandAllocator::create(display_ctx* display, CAnlan
         delete alloc;
         return nullptr;
     }
-    alloc->m_good = true;
-    // 使用 static_cast 将派生类指针转换为基类指针，然后构造 CSharedPointer
     return CSharedPointer<IAllocator>(static_cast<IAllocator*>(alloc));
 }
 
@@ -51,7 +49,6 @@ bool CAnlandAllocator::importBuffers() {
         if (buf->good()) {
             m_buffers.emplace_back(buf);
         }
-        // 不要 close(fd)，CAnlandBuffer 已经 dup 了
     }
     m_bufferCount = m_buffers.size();
     return m_bufferCount > 0;
@@ -78,17 +75,16 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
         if (b && !b->inUse) {
             b->inUse = true;
             m_lastAcquired = next;
-            return std::static_pointer_cast<IBuffer>(b);
+            return CSharedPointer<IBuffer>(static_cast<IBuffer*>(b.get()));
         }
         next = (next + 1) % m_buffers.size();
         attempts++;
     }
-    // Fallback: return first buffer even if in use
     auto b = m_buffers[next].lock();
     if (b) {
         b->inUse = true;
         m_lastAcquired = next;
-        return std::static_pointer_cast<IBuffer>(b);
+        return CSharedPointer<IBuffer>(static_cast<IBuffer*>(b.get()));
     }
     return nullptr;
 }

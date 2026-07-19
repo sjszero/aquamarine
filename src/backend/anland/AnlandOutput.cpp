@@ -18,20 +18,7 @@ namespace Aquamarine {
 
 using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
-
-static uint32_t getCurrentTimeMs() {
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
-}
-
-static uint32_t protocolFormatToDrm(uint32_t fmt) {
-    switch (fmt) {
-        case 1: return DRM_FORMAT_ABGR8888;
-        case 2: return DRM_FORMAT_XBGR8888;
-        case 3: return DRM_FORMAT_RGB565;
-        default: return DRM_FORMAT_XRGB8888;
-    }
-}
+using Hyprutils::Math::CRegion;
 
 CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     : m_backend(backend) {
@@ -134,7 +121,6 @@ void CAnlandOutput::reconfigureSwapchain() {
     opts.size = mode->pixelSize;
     opts.format = DRM_FORMAT_XRGB8888;
     opts.scanout = true;
-    opts.scanoutOutput = this->self.lock();
 
     if (!m_swapchain->reconfigure(opts)) {
         ANLAND_ERR("reconfigureSwapchain: failed to reconfigure");
@@ -192,7 +178,6 @@ bool CAnlandOutput::commit() {
         return true;
     }
 
-    // 获取当前缓冲区
     if (!m_swapchain) {
         reconfigureSwapchain();
         if (!m_swapchain) return true;
@@ -205,11 +190,9 @@ bool CAnlandOutput::commit() {
         return true;
     }
 
-    // 设置缓冲区到状态
     state->setBuffer(buffer);
-    state->addDamage(CRegion{0, 0, (int)m_width, (int)m_height});
+    state->addDamage(CRegion(0, 0, (int)m_width, (int)m_height));
 
-    // 提交到 display_producer
     int ret = trigger_refresh(dpy);
     if (ret < 0) {
         ANLAND_ERR("commit: trigger_refresh failed");
@@ -239,7 +222,6 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     m_frameScheduled = true;
     m_needsFrame = true;
 
-    // 使用空闲事件触发帧
     if (!m_frameIdle) {
         m_frameIdle = Hyprutils::Memory::makeShared<std::function<void(void)>>([this]() {
             m_frameScheduled = false;
@@ -281,7 +263,6 @@ void CAnlandOutput::onBufferReady() {
 
     m_framePending = false;
 
-    // 完成帧 - 通知 Hyprland
     timespec mono{};
     clock_gettime(CLOCK_MONOTONIC, &mono);
     events.present.emit(IOutput::SPresentEvent{
@@ -329,16 +310,11 @@ void CAnlandOutput::exitFallback() {
     m_needsFrame = true;
     m_frameScheduled = false;
 
-    // 重新配置 swapchain
     reconfigureSwapchain();
 
     scheduleFrame(AQ_SCHEDULE_NEW_CONNECTOR);
     events.frame.emit();
     ANLAND_LOG("exitFallback: done");
-}
-
-bool CAnlandOutput::pendingPageFlip() {
-    return m_framePending;
 }
 
 } // namespace Aquamarine
