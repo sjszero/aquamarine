@@ -12,7 +12,6 @@ on:
         description: 'Hyprland Debian version (e.g. 0.55.2+ds-1~bpo13+1)'
         required: true
         default: '0.55.2+ds-1~bpo13+1'
-
       skip_aquamarine:
         description: 'Skip Aquamarine build (use pre-installed)'
         required: false
@@ -122,7 +121,8 @@ jobs:
             uuid-dev libsystemd-dev \
             libre2-dev libmuparser-dev liblcms2-dev \
             liblua5.4-dev \
-            hwdata
+            hwdata \
+            libglslang-dev libglslang-default-resource-limits-dev
 
       - name: Install backports dependencies
         run: |
@@ -165,7 +165,6 @@ jobs:
             -DCMAKE_INSTALL_LIBDIR=lib
           make -j$(nproc)
           make install
-          ls -la /usr/local/lib/cmake/hyprwayland-scanner/ 2>/dev/null || echo "Config files not found"
 
       - name: Verify hyprwayland-scanner
         run: |
@@ -330,7 +329,6 @@ jobs:
         if: inputs.skip_hyprland != true
         run: echo "Starting Hyprland build..."
 
-      # ---------- 缓存 Hyprland 源码（仅在 clean_cache 为 false 时恢复） ----------
       - name: Cache Hyprland source
         id: hypr-src-cache
         if: inputs.skip_hyprland != true && inputs.clean_cache != true
@@ -342,13 +340,11 @@ jobs:
             src-hypr-${{ inputs.hyprland_version }}-
             src-hypr-
 
-      # ---------- 获取 Hyprland 源码（当 clean_cache 为 true 或缓存未命中时） ----------
       - name: Fetch Hyprland source
         if: inputs.skip_hyprland != true && (inputs.clean_cache == true || steps.hypr-src-cache.outputs.cache-hit != 'true')
         run: |
           apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
 
-      # ---------- 总是应用补丁（git apply 会检测是否已应用） ----------
       - name: Apply Anland patch to Hyprland
         if: inputs.skip_hyprland != true
         run: |
@@ -356,7 +352,8 @@ jobs:
           PATCH_FILE="../${{ env.HYPR_PATCH }}"
           if [ -f "$PATCH_FILE" ]; then
             echo "Applying ${{ env.HYPR_PATCH }} with git apply..."
-            git apply --verbose "$PATCH_FILE" || true
+            git apply --verbose --ignore-space-change --ignore-whitespace "$PATCH_FILE" || \
+              patch -p1 < "$PATCH_FILE" || true
           else
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
