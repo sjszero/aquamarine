@@ -12,16 +12,14 @@ namespace Aquamarine {
 
 CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info)
     : m_fd(dup(fd)), m_info(info) {
-    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d (dup from %d), size=%dx%d, format=0x%x (%s), modifier=0x%lx, stride=%d, offset=%d",
-                 m_fd, fd, info.width, info.height, info.format, 
-                 info.format == 1 ? "XR24" : "unknown", 
-                 info.modifier, info.stride, info.offset);
+    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d (dup from %d), size=%dx%d, format=0x%x, modifier=0x%lx, stride=%d, offset=%d",
+                 m_fd, fd, info.width, info.height, info.format, info.modifier, info.stride, info.offset);
     size = { (float)info.width, (float)info.height };
     opaque = true;
 }
 
 CAnlandDmaBuffer::~CAnlandDmaBuffer() {
-    ANLAND_DEBUG("CAnlandDmaBuffer destructor: fd=%d, inUse=%d", m_fd, inUse);
+    ANLAND_DEBUG("CAnlandDmaBuffer destructor: fd=%d, inUse=%d", m_fd, (int)inUse);
     inUse = false;
     if (m_fd >= 0) {
         close(m_fd);
@@ -58,7 +56,7 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
 }
 
 void CAnlandDmaBuffer::sendRelease() {
-    ANLAND_DEBUG("sendRelease: fd=%d, inUse was %d", m_fd, inUse);
+    ANLAND_DEBUG("sendRelease: fd=%d, inUse was %d", m_fd, (int)inUse);
     inUse = false;
     events.backendRelease.emit();
 }

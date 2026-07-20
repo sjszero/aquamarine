@@ -14,7 +14,7 @@ using Hyprutils::Memory::CSharedPointer;
 
 CAnlandAllocator::CAnlandAllocator(CAnlandOutput* output)
     : m_output(output) {
-    ANLAND_DEBUG("CAnlandAllocator constructed for output %p", output);
+    ANLAND_DEBUG("CAnlandAllocator constructed for output %p", (void*)output);
 }
 
 CSharedPointer<IAllocator> CAnlandAllocator::create(CAnlandOutput* output) {
@@ -23,7 +23,7 @@ CSharedPointer<IAllocator> CAnlandAllocator::create(CAnlandOutput* output) {
         return nullptr;
     }
     auto alloc = new CAnlandAllocator(output);
-    ANLAND_DEBUG("create: allocator created at %p", alloc);
+    ANLAND_DEBUG("create: allocator created at %p", (void*)alloc);
     return CSharedPointer<IAllocator>(static_cast<IAllocator*>(alloc));
 }
 

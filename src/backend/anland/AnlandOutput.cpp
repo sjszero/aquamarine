@@ -15,6 +15,8 @@
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_WARN(fmt, ...) do { fprintf(stderr, "[ANLAND][WARN] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
 namespace Aquamarine {
 
@@ -35,8 +37,8 @@ static bool initEGLFunctions() {
     g_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
     g_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
     g_eglFunctionsInitialized = true;
-    ANLAND_LOG("EGL functions: createImage=%p, destroyImage=%p, targetTexture=%p",
-               g_eglCreateImageKHR, g_eglDestroyImageKHR, g_glEGLImageTargetTexture2DOES);
+    ANLAND_LOG("EGL functions initialized: createImage=%p, destroyImage=%p, targetTexture=%p",
+               (void*)g_eglCreateImageKHR, (void*)g_eglDestroyImageKHR, (void*)g_glEGLImageTargetTexture2DOES);
     return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr && g_glEGLImageTargetTexture2DOES != nullptr;
 }
 
@@ -167,7 +169,6 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
-    // 获取第一个缓冲区的实际格式
     uint32_t actualFormat = DRM_FORMAT_XRGB8888;
     auto firstBuf = getBuffer(0);
     if (firstBuf) {
@@ -239,7 +240,6 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 监听 release 和 destroy 事件
     [[maybe_unused]] auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
         ANLAND_TRACE("Buffer %d released (backendRelease)", index);
         if (index < m_bufferCount && m_slots[index].buffer) {
@@ -406,7 +406,7 @@ bool CAnlandOutput::commit() {
     }
 
     if (slot.buffer) {
-        ANLAND_DEBUG("commit: setting buffer %d (fd=%d) on state", m_selectedIndex, slot.buffer->dmabuf().fds[0]);
+        ANLAND_DEBUG("commit: setting buffer %d on state", m_selectedIndex);
         state->setBuffer(slot.buffer);
     } else {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
