@@ -150,11 +150,12 @@ void CAnlandOutput::updateRefreshRate(uint32_t refresh) {
 void CAnlandOutput::releaseBuffers() {
     ANLAND_TRACE("releaseBuffers START");
     for (int i = 0; i < MAX_BUFS; i++) {
+        // 手动重置 inUse，因为缓冲区可能已被销毁
+        m_slots[i].inUse = false;
         destroyBuffer(i);
     }
     m_bufferCount = 0;
     m_buffersImported = false;
-    // 基类的 swapchain 在这里重置
     this->swapchain.reset();
     ANLAND_TRACE("releaseBuffers END");
 }
@@ -241,9 +242,19 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 监听 release 事件 - 保存返回值避免警告
-    [[maybe_unused]] auto listener = slot->buffer->events.backendRelease.listen([this, index]() {
-        ANLAND_TRACE("Buffer %d released", index);
+    // 监听 release 和 destroy 事件
+    [[maybe_unused]] auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
+        ANLAND_TRACE("Buffer %d released (backendRelease)", index);
+        if (index < m_bufferCount && m_slots[index].buffer) {
+            m_slots[index].inUse = false;
+        }
+    });
+
+    [[maybe_unused]] auto destroyListener = slot->buffer->events.destroy.listen([this, index]() {
+        ANLAND_TRACE("Buffer %d destroyed", index);
+        if (index < m_bufferCount) {
+            m_slots[index].inUse = false;
+        }
     });
 
     slot->width = info.width;

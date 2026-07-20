@@ -18,6 +18,8 @@ CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info)
 
 CAnlandDmaBuffer::~CAnlandDmaBuffer() {
     ANLAND_TRACE("CAnlandDmaBuffer destructor: fd=%d", m_fd);
+    // 析构时释放缓冲区，重置 inUse 标志
+    inUse = false;
     if (m_fd >= 0) close(m_fd);
     events.destroy.emit();
 }
@@ -48,6 +50,7 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
 }
 
 void CAnlandDmaBuffer::sendRelease() {
+    ANLAND_TRACE("sendRelease: fd=%d, inUse was %d", m_fd, inUse);
     inUse = false;
     events.backendRelease.emit();
 }
