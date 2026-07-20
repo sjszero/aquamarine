@@ -20,18 +20,37 @@ CSharedPointer<IAllocator> CAnlandAllocator::create(CAnlandOutput* output) {
 
 CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& params, CSharedPointer<CSwapchain> swapchain) {
     (void)params;
-    (void)swapchain;
     if (!m_output) return nullptr;
 
     int count = m_output->getBufferCount();
     if (count <= 0) return nullptr;
 
-    m_lastAcquired = (m_lastAcquired + 1) % count;
-    auto buf = m_output->getBuffer(m_lastAcquired);
+    // 找下一个可用的缓冲区（未在使用中）
+    int start = (m_lastAcquired + 1) % count;
+    int idx = start;
+    bool found = false;
+    
+    for (int i = 0; i < count; i++) {
+        auto buf = m_output->getBuffer(idx);
+        if (buf && !buf->inUse) {
+            buf->inUse = true;
+            m_lastAcquired = idx;
+            found = true;
+            // 确保缓冲区对象被正确引用
+            return CSharedPointer<IBuffer>(static_cast<IBuffer*>(buf.get()));
+        }
+        idx = (idx + 1) % count;
+    }
+
+    // 如果没有找到空闲缓冲区，返回第一个（老缓冲区会被覆盖）
+    auto buf = m_output->getBuffer(start);
     if (buf) {
         buf->inUse = true;
+        m_lastAcquired = start;
+        return CSharedPointer<IBuffer>(static_cast<IBuffer*>(buf.get()));
     }
-    return CSharedPointer<IBuffer>(static_cast<IBuffer*>(buf.get()));
+
+    return nullptr;
 }
 
 CSharedPointer<CBackend> CAnlandAllocator::getBackend() {

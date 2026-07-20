@@ -29,15 +29,12 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
     attrs.success = true;
     attrs.size = size;
     attrs.format = m_info.format;
-    // 关键修复：强制使用 INVALID modifier，避免 EGL_BAD_MATCH
-    // 守护进程可能使用 TILED3/COMPRESSED modifier，但 EGL 导入时可能不兼容
-    // 使用 INVALID 让驱动使用隐式 modifier，兼容性最好
+    // 强制使用 INVALID modifier，避免 EGL_BAD_MATCH
     attrs.modifier = DRM_FORMAT_MOD_INVALID;
     attrs.planes = 1;
     attrs.fds[0] = m_fd;
     attrs.offsets[0] = m_info.offset;
     attrs.strides[0] = m_info.stride;
-    // 未使用的 plane 置为 -1
     for (int i = 1; i < 4; i++) {
         attrs.fds[i] = -1;
         attrs.offsets[i] = 0;

@@ -24,6 +24,13 @@ public:
     virtual SSHMAttrs shm() override { return SSHMAttrs{}; }
     virtual std::tuple<uint8_t*, uint32_t, size_t> beginDataPtr(uint32_t flags) override { return {nullptr, 0, 0}; }
     virtual void endDataPtr() override {}
+    
+    // 添加 release 支持
+    virtual void sendRelease() override {
+        inUse = false;
+        // 通知 swapchain 缓冲区已释放
+        events.backendRelease.emit();
+    }
 
     bool inUse = false;
 

@@ -207,12 +207,6 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 如果 slot 已有 buffer，直接标记已导入
-    if (slot->buffer && slot->buffer->good()) {
-        slot->imported = true;
-        return true;
-    }
-
     int fd = get_dmabuf_fd_at(dpy, index);
     if (fd < 0) {
         ANLAND_ERR("importBuffer: get_dmabuf_fd_at failed for %d", index);
@@ -226,13 +220,18 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // CAnlandDmaBuffer 会自己 dup fd，我们关闭原始 fd
     slot->buffer = CSharedPointer<CAnlandDmaBuffer>(new CAnlandDmaBuffer(fd, info));
     close(fd);
     if (!slot->buffer->good()) {
         slot->buffer = nullptr;
         return false;
     }
+
+    // 监听 release 事件
+    slot->buffer->events.backendRelease.listen([this, index]() {
+        // 缓冲区已释放，可以重新使用
+        ANLAND_TRACE("Buffer %d released", index);
+    });
 
     slot->width = info.width;
     slot->height = info.height;
@@ -242,6 +241,7 @@ bool CAnlandOutput::importBuffer(int index) {
     slot->stride = info.stride;
     slot->imported = true;
     slot->hasDamage = true;
+    slot->inUse = false;  // 初始状态
 
     ANLAND_LOG("importBuffer: slot %d registered (EGL import deferred)", index);
     return true;
