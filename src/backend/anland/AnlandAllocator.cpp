@@ -4,6 +4,10 @@
 #include "AnlandBuffer.hpp"
 #include <aquamarine/backend/Backend.hpp>
 
+#define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+
 namespace Aquamarine {
 
 using Hyprutils::Memory::CSharedPointer;

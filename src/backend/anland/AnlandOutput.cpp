@@ -198,7 +198,7 @@ void CAnlandOutput::reconfigureSwapchain() {
     SSwapchainOptions opts;
     opts.length = m_bufferCount;
     opts.size = Hyprutils::Math::Vector2D((float)m_width, (float)m_height);
-    opts.format = actualFormat;  // 使用实际格式
+    opts.format = actualFormat;
     opts.scanout = true;
 
     if (!this->swapchain->reconfigure(opts)) {
@@ -241,9 +241,8 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 监听 release 事件
-    slot->buffer->events.backendRelease.listen([this, index]() {
-        // 缓冲区已释放，可以重新使用
+    // 监听 release 事件 - 保存返回值避免警告
+    [[maybe_unused]] auto listener = slot->buffer->events.backendRelease.listen([this, index]() {
         ANLAND_TRACE("Buffer %d released", index);
     });
 
@@ -255,7 +254,7 @@ bool CAnlandOutput::importBuffer(int index) {
     slot->stride = info.stride;
     slot->imported = true;
     slot->hasDamage = true;
-    slot->inUse = false;  // 初始状态
+    slot->inUse = false;
 
     ANLAND_LOG("importBuffer: slot %d registered (EGL import deferred)", index);
     return true;

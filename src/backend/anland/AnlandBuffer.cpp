@@ -29,10 +29,8 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
 
     attrs.success = true;
     attrs.size = size;
-    // 使用实际格式
     attrs.format = m_info.format;
-    // 尝试使用 INVALID modifier，但如果驱动支持，也可以使用实际 modifier
-    // 这里我们先尝试 INVALID
+    // 使用 INVALID modifier 提高兼容性
     attrs.modifier = DRM_FORMAT_MOD_INVALID;
     attrs.planes = 1;
     attrs.fds[0] = m_fd;
@@ -47,6 +45,11 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
     ANLAND_TRACE("dmabuf: fd=%d, format=0x%x, modifier=0x%lx, stride=%d, offset=%d",
                  m_fd, attrs.format, attrs.modifier, attrs.strides[0], attrs.offsets[0]);
     return attrs;
+}
+
+void CAnlandDmaBuffer::sendRelease() {
+    inUse = false;
+    events.backendRelease.emit();
 }
 
 } // namespace Aquamarine
