@@ -15,8 +15,6 @@
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
-#define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
-#define ANLAND_WARN(fmt, ...) do { fprintf(stderr, "[ANLAND][WARN] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
 namespace Aquamarine {
 
@@ -24,6 +22,7 @@ using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::Math::CRegion;
 
+// EGL 函数指针 - 与 KWin 一样，由 Hyprland 的 OpenGL 上下文提供
 static PFNEGLCREATEIMAGEKHRPROC g_eglCreateImageKHR = nullptr;
 static PFNEGLDESTROYIMAGEKHRPROC g_eglDestroyImageKHR = nullptr;
 static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC g_glEGLImageTargetTexture2DOES = nullptr;
@@ -33,12 +32,12 @@ static bool initEGLFunctions() {
     if (g_eglFunctionsInitialized) {
         return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr;
     }
+    // 从当前 EGL 上下文获取函数指针
     g_eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
     g_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
     g_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
     g_eglFunctionsInitialized = true;
-    ANLAND_LOG("EGL functions initialized: createImage=%p, destroyImage=%p, targetTexture=%p",
-               (void*)g_eglCreateImageKHR, (void*)g_eglDestroyImageKHR, (void*)g_glEGLImageTargetTexture2DOES);
+    ANLAND_LOG("EGL functions initialized");
     return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr && g_glEGLImageTargetTexture2DOES != nullptr;
 }
 
@@ -157,6 +156,7 @@ void CAnlandOutput::releaseBuffers() {
     ANLAND_TRACE("releaseBuffers END");
 }
 
+// 与 KWin 一样：使用输出的大小，而不是 dmabuf 的大小
 void CAnlandOutput::reconfigureSwapchain() {
     ANLAND_TRACE("reconfigureSwapchain START");
     if (!m_buffersImported || m_bufferCount <= 0) {
@@ -169,6 +169,7 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
+    // 获取实际格式
     uint32_t actualFormat = DRM_FORMAT_XRGB8888;
     auto firstBuf = getBuffer(0);
     if (firstBuf) {
@@ -192,6 +193,7 @@ void CAnlandOutput::reconfigureSwapchain() {
         }
     }
 
+    // 关键：使用输出的大小 (m_width/m_height)，而不是 dmabuf 的大小
     SSwapchainOptions opts;
     opts.length = m_bufferCount;
     opts.size = Hyprutils::Math::Vector2D((float)m_width, (float)m_height);
@@ -202,7 +204,8 @@ void CAnlandOutput::reconfigureSwapchain() {
         ANLAND_ERR("reconfigureSwapchain: failed to reconfigure");
         return;
     }
-    ANLAND_LOG("reconfigureSwapchain: success, %d buffers, format 0x%x", m_bufferCount, actualFormat);
+    ANLAND_LOG("reconfigureSwapchain: success, %d buffers, format 0x%x, size %dx%d", 
+               m_bufferCount, actualFormat, m_width, m_height);
 }
 
 bool CAnlandOutput::importBuffer(int index) {
@@ -231,7 +234,10 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    ANLAND_DEBUG("importBuffer: creating CAnlandDmaBuffer for fd=%d", fd);
+    ANLAND_TRACE("importBuffer: fd=%d, size=%dx%d, format=0x%x, stride=%d", 
+                 fd, info.width, info.height, info.format, info.stride);
+
+    // 创建 CAnlandDmaBuffer 包装 dmabuf
     slot->buffer = CSharedPointer<CAnlandDmaBuffer>(new CAnlandDmaBuffer(fd, info));
     close(fd);
     if (!slot->buffer->good()) {
@@ -240,8 +246,9 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
+    // 监听 release 事件
     [[maybe_unused]] auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
-        ANLAND_TRACE("Buffer %d released (backendRelease)", index);
+        ANLAND_TRACE("Buffer %d released", index);
         if (index < m_bufferCount && m_slots[index].buffer) {
             m_slots[index].inUse = false;
         }
@@ -264,7 +271,7 @@ bool CAnlandOutput::importBuffer(int index) {
     slot->hasDamage = true;
     slot->inUse = false;
 
-    ANLAND_LOG("importBuffer: slot %d registered (EGL import deferred)", index);
+    ANLAND_LOG("importBuffer: slot %d registered", index);
     return true;
 }
 
@@ -303,7 +310,7 @@ void CAnlandOutput::importBuffers() {
     }
 
     int count = get_buf_count(dpy);
-    ANLAND_LOG("importBuffers: get_buf_count returned %d", count);
+    ANLAND_LOG("importBuffers: got %d buffers", count);
     if (count <= 0 || count > MAX_BUFS) {
         ANLAND_ERR("importBuffers: invalid count %d", count);
         return;
@@ -343,7 +350,7 @@ bool CAnlandOutput::commit() {
     } guard(m_commitInProgress);
 
     if (m_inFallback || !m_outputReady) {
-        ANLAND_LOG("commit: fallback/notready - immediate completion");
+        ANLAND_LOG("commit: fallback - immediate completion");
         m_framePending = false;
         events.present.emit(IOutput::SPresentEvent{
             .presented = true,
@@ -391,7 +398,7 @@ bool CAnlandOutput::commit() {
     }
 
     m_selectedIndex = get_selected_idx(dpy);
-    ANLAND_DEBUG("commit: selected index=%d, bufferCount=%d", m_selectedIndex, m_bufferCount);
+    ANLAND_TRACE("commit: selected index=%d", m_selectedIndex);
     if (m_selectedIndex >= m_bufferCount) {
         m_selectedIndex = 0;
     }
@@ -399,14 +406,12 @@ bool CAnlandOutput::commit() {
     auto& slot = m_slots[m_selectedIndex];
 
     if (!slot.imported) {
-        ANLAND_WARN("commit: slot %d not imported, attempting import", m_selectedIndex);
         if (!importBuffer(m_selectedIndex)) {
             ANLAND_ERR("commit: importBuffer failed for %d", m_selectedIndex);
         }
     }
 
     if (slot.buffer) {
-        ANLAND_DEBUG("commit: setting buffer %d on state", m_selectedIndex);
         state->setBuffer(slot.buffer);
     } else {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
@@ -416,7 +421,6 @@ bool CAnlandOutput::commit() {
 
     if (m_shouldTriggerRefresh) {
         m_shouldTriggerRefresh = false;
-        ANLAND_DEBUG("commit: calling trigger_refresh");
         int ret = trigger_refresh(dpy);
         if (ret < 0) {
             ANLAND_ERR("commit: trigger_refresh failed");
@@ -432,10 +436,10 @@ bool CAnlandOutput::commit() {
             return true;
         }
         m_framePending = true;
-        ANLAND_LOG("commit: frame pending (trigger_refresh called)");
+        ANLAND_LOG("commit: frame pending");
     } else {
         m_framePending = false;
-        ANLAND_LOG("commit: no trigger_refresh (mode setting or idle)");
+        ANLAND_LOG("commit: no trigger_refresh");
         events.present.emit(IOutput::SPresentEvent{
             .presented = true,
             .when = nullptr,
@@ -454,7 +458,6 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     if (m_destroying) return;
 
     if (m_inFallback || !m_outputReady) {
-        ANLAND_TRACE("scheduleFrame: fallback - emitting immediate frame");
         events.frame.emit();
         return;
     }
@@ -469,7 +472,6 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     }
 
     m_shouldTriggerRefresh = true;
-
     events.frame.emit();
 
     if (!m_frameIdle) {
@@ -512,7 +514,7 @@ void CAnlandOutput::onBufferReady() {
     if (fd >= 0) {
         uint64_t val;
         if (read(fd, &val, sizeof(val)) < 0 && errno != EAGAIN) {
-            ANLAND_ERR("onBufferReady: read eventfd failed: %s", strerror(errno));
+            ANLAND_ERR("onBufferReady: read failed: %s", strerror(errno));
         }
     }
 

@@ -14,7 +14,7 @@ using Hyprutils::Memory::CSharedPointer;
 
 CAnlandAllocator::CAnlandAllocator(CAnlandOutput* output)
     : m_output(output) {
-    ANLAND_DEBUG("CAnlandAllocator constructed for output %p", (void*)output);
+    ANLAND_DEBUG("CAnlandAllocator constructed");
 }
 
 CSharedPointer<IAllocator> CAnlandAllocator::create(CAnlandOutput* output) {
@@ -23,7 +23,6 @@ CSharedPointer<IAllocator> CAnlandAllocator::create(CAnlandOutput* output) {
         return nullptr;
     }
     auto alloc = new CAnlandAllocator(output);
-    ANLAND_DEBUG("create: allocator created at %p", (void*)alloc);
     return CSharedPointer<IAllocator>(static_cast<IAllocator*>(alloc));
 }
 
@@ -36,38 +35,34 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
 
     int count = m_output->getBufferCount();
     if (count <= 0) {
-        ANLAND_ERROR("acquire: no buffers available (count=%d)", count);
+        ANLAND_ERROR("acquire: no buffers available");
         return nullptr;
     }
 
     int start = (m_lastAcquired + 1) % count;
     int idx = start;
     
-    ANLAND_DEBUG("acquire: looking for free buffer, start=%d, count=%d, lastAcquired=%d", start, count, m_lastAcquired);
-    
     for (int i = 0; i < count; i++) {
         auto buf = m_output->getBuffer(idx);
         if (buf && buf->good() && !buf->inUse) {
             buf->inUse = true;
             m_lastAcquired = idx;
-            auto attrs = buf->dmabuf();
-            ANLAND_DEBUG("acquire: using buffer %d (fd=%d, inUse set to true)", idx, attrs.fds[0]);
+            ANLAND_DEBUG("acquire: using buffer %d", idx);
             return buf;
         }
         idx = (idx + 1) % count;
     }
 
-    // 所有缓冲区都在使用中，尝试返回第一个
+    // 所有缓冲区都在使用中，返回第一个
     auto buf = m_output->getBuffer(start);
     if (buf && buf->good()) {
-        auto attrs = buf->dmabuf();
-        ANLAND_DEBUG("acquire: reusing buffer %d (all busy, fd=%d)", start, attrs.fds[0]);
+        ANLAND_DEBUG("acquire: reusing buffer %d (all busy)", start);
         buf->inUse = true;
         m_lastAcquired = start;
         return buf;
     }
 
-    ANLAND_ERROR("acquire: no usable buffers (count=%d)", count);
+    ANLAND_ERROR("acquire: no usable buffers");
     return nullptr;
 }
 
