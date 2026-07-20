@@ -4,6 +4,7 @@
 
 #include <aquamarine/buffer/Buffer.hpp>
 #include <hyprutils/math/Vector2D.hpp>
+#include <drm_fourcc.h>
 #include "display_producer.h"
 
 namespace Aquamarine {

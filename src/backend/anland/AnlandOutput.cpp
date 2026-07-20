@@ -165,7 +165,7 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height) {
 
     auto mode = CSharedPointer<SOutputMode>(
         new SOutputMode{
-            .pixelSize = Hyprutils::Math::Vector2D((float)width, (float)height),
+            .pixelSize = Hyprutils::Math::Vector2D(static_cast<float>(width), static_cast<float>(height)),
             .refreshRate = m_refresh,
             .preferred = true,
         });
@@ -181,14 +181,15 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height) {
     if (this->swapchain) {
         SSwapchainOptions opts;
         opts.length = m_bufferCount > 0 ? m_bufferCount : 3;
-        opts.size = Hyprutils::Math::Vector2D((float)width, (float)height);
+        opts.size = Hyprutils::Math::Vector2D(static_cast<float>(width), static_cast<float>(height));
         opts.format = m_drmFormat;
         opts.scanout = true;
         this->swapchain->reconfigure(opts);
         ANLAND_DEBUG("updateMode: swapchain reconfigured to %dx%d", width, height);
     }
 
-    events.state.emit(IOutput::SStateEvent{.size = {width, height}});
+    Hyprutils::Math::Vector2D size(static_cast<float>(width), static_cast<float>(height));
+    events.state.emit(IOutput::SStateEvent{.size = size});
 }
 
 void CAnlandOutput::reconfigureSwapchain() {
@@ -223,7 +224,7 @@ void CAnlandOutput::reconfigureSwapchain() {
 
     SSwapchainOptions opts;
     opts.length = m_bufferCount;
-    opts.size = Hyprutils::Math::Vector2D((float)m_width, (float)m_height);
+    opts.size = Hyprutils::Math::Vector2D(static_cast<float>(m_width), static_cast<float>(m_height));
     opts.format = actualFormat;
     opts.scanout = true;
 
