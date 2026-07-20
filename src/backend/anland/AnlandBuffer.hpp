@@ -13,7 +13,8 @@ class CAnlandAllocator;
 
 class CAnlandDmaBuffer : public IBuffer {
 public:
-    CAnlandDmaBuffer(int fd, const buf_info& info, uint64_t modifier = DRM_FORMAT_MOD_INVALID);
+    CAnlandDmaBuffer(int fd, const buf_info& info,
+                     uint32_t drmFormat, uint64_t modifier = DRM_FORMAT_MOD_INVALID);
     virtual ~CAnlandDmaBuffer();
 
     virtual eBufferCapability caps() override { return BUFFER_CAPABILITY_NONE; }
@@ -32,8 +33,8 @@ public:
 private:
     int m_fd = -1;
     buf_info m_info;
+    uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
     uint64_t m_modifier = DRM_FORMAT_MOD_INVALID;
-    // 保存一份 fd 的副本，在析构时关闭
     int m_ownedFd = -1;
 };
 

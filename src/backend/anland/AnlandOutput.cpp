@@ -39,6 +39,20 @@ static bool initEGLFunctions() {
     return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr && g_glEGLImageTargetTexture2DOES != nullptr;
 }
 
+/* ============================================================
+ * protocol_format_to_drm - 将协议格式转换为 DRM fourcc
+ * 消费者使用 Android 的像素格式枚举:
+ *   1 = RGBA_8888 -> DRM_FORMAT_ABGR8888
+ * ============================================================ */
+static uint32_t protocol_format_to_drm(uint32_t fmt) {
+    switch (fmt) {
+    case 1:  // Android RGBA_8888
+        return DRM_FORMAT_ABGR8888;
+    default:
+        return DRM_FORMAT_XRGB8888;
+    }
+}
+
 CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     : m_backend(backend) {
     ANLAND_TRACE("CAnlandOutput constructor START");
@@ -75,16 +89,11 @@ display_ctx* CAnlandOutput::display() {
     return m_backend->display();
 }
 
-/* ============================================================
- * ensureEGLInitialized - 延迟初始化 EGL
- * 只有在真正需要创建 EGLImage 时才初始化，此时 Hyprland 已创建 EGL 上下文
- * ============================================================ */
 bool CAnlandOutput::ensureEGLInitialized() {
     if (m_eglInitialized && m_eglDisplay != EGL_NO_DISPLAY) return true;
 
     m_eglDisplay = eglGetCurrentDisplay();
     if (m_eglDisplay == EGL_NO_DISPLAY) {
-        // 延迟初始化：EGL 上下文尚未创建，稍后重试
         ANLAND_DEBUG("ensureEGLInitialized: no current EGL display, will retry later");
         return false;
     }
@@ -161,13 +170,15 @@ void CAnlandOutput::releaseBuffers() {
     ANLAND_TRACE("releaseBuffers END");
 }
 
-void CAnlandOutput::updateMode(uint32_t width, uint32_t height) {
-    if (width == m_width && height == m_height)
+void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format) {
+    if (width == m_width && height == m_height && format == m_drmFormat)
         return;
 
-    ANLAND_LOG("updateMode: %dx%d -> %dx%d", m_width, m_height, width, height);
+    ANLAND_LOG("updateMode: %dx%d fmt 0x%x -> %dx%d fmt 0x%x",
+               m_width, m_height, m_drmFormat, width, height, format);
     m_width = width;
     m_height = height;
+    m_drmFormat = format;
 
     auto mode = CSharedPointer<SOutputMode>(
         new SOutputMode{
@@ -184,14 +195,16 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height) {
         static_cast<float>(height) / 96.0f
     );
 
+    this->state->setFormat(format);
+
     if (this->swapchain) {
         SSwapchainOptions opts;
         opts.length = m_bufferCount > 0 ? m_bufferCount : 3;
         opts.size = Hyprutils::Math::Vector2D(static_cast<float>(width), static_cast<float>(height));
-        opts.format = m_drmFormat;
+        opts.format = format;
         opts.scanout = true;
         this->swapchain->reconfigure(opts);
-        ANLAND_DEBUG("updateMode: swapchain reconfigured to %dx%d", width, height);
+        ANLAND_DEBUG("updateMode: swapchain reconfigured to %dx%d fmt 0x%x", width, height, format);
     }
 
     Hyprutils::Math::Vector2D size(static_cast<float>(width), static_cast<float>(height));
@@ -242,9 +255,6 @@ void CAnlandOutput::reconfigureSwapchain() {
                m_bufferCount, actualFormat, m_width, m_height);
 }
 
-/* ============================================================
- * importBuffer - 导入单个 dmabuf（延迟 EGL 初始化）
- * ============================================================ */
 bool CAnlandOutput::importBuffer(int index) {
     ANLAND_TRACE("importBuffer: index=%d", index);
     if (index < 0 || index >= MAX_BUFS || m_destroying) return false;
@@ -271,17 +281,25 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, format=0x%x, modifier=0x%lx, stride=%d",
-                 fd, info.width, info.height, info.format, info.modifier, info.stride);
-
-    // 保存 dmabuf 信息，但不创建 EGLImage（延迟到实际渲染时）
+    // 关键修复：协议格式 -> DRM 格式
+    uint32_t drmFormat = protocol_format_to_drm(info.format);
     uint64_t modifier = info.modifier;
     if (modifier == 0) {
         modifier = DRM_FORMAT_MOD_INVALID;
     }
 
-    slot->buffer = CSharedPointer<CAnlandDmaBuffer>(new CAnlandDmaBuffer(fd, info, modifier));
+    ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, protocol_fmt=0x%x -> drm_fmt=0x%x, modifier=0x%lx, stride=%d",
+                 fd, info.width, info.height, info.format, drmFormat, modifier, info.stride);
+
+    if (!ensureEGLInitialized()) {
+        close(fd);
+        return false;
+    }
+
+    slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
+        new CAnlandDmaBuffer(fd, info, drmFormat, modifier));
     close(fd);
+
     if (!slot->buffer->good()) {
         ANLAND_ERR("importBuffer: buffer not good");
         slot->buffer = nullptr;
@@ -304,7 +322,7 @@ bool CAnlandOutput::importBuffer(int index) {
 
     slot->width = info.width;
     slot->height = info.height;
-    slot->format = info.format;
+    slot->format = drmFormat;
     slot->modifier = modifier;
     slot->offset = info.offset;
     slot->stride = info.stride;
@@ -313,7 +331,8 @@ bool CAnlandOutput::importBuffer(int index) {
     slot->inUse = false;
     slot->damage = CRegion(0, 0, info.width, info.height);
 
-    ANLAND_LOG("importBuffer: slot %d registered (size %dx%d)", index, info.width, info.height);
+    ANLAND_LOG("importBuffer: slot %d registered (size %dx%d, fmt 0x%x)",
+               index, info.width, info.height, drmFormat);
     return true;
 }
 
@@ -371,21 +390,22 @@ void CAnlandOutput::importBuffers() {
         }
     }
 
+    m_bufferCount = count;
+    m_buffersImported = true;
+
     if (count > 0 && m_slots[0].imported) {
         uint32_t w = m_slots[0].width;
         uint32_t h = m_slots[0].height;
-        if (w > 0 && h > 0 && (w != m_width || h != m_height)) {
-            ANLAND_LOG("importBuffers: buffer size changed to %dx%d, updating output", w, h);
-            updateMode(w, h);
-        }
-        if (m_slots[0].format != 0) {
-            m_drmFormat = m_slots[0].format;
+        uint32_t fmt = m_slots[0].format;
+        if (w > 0 && h > 0 && fmt != 0) {
+            if (w != m_width || h != m_height || fmt != m_drmFormat) {
+                ANLAND_LOG("importBuffers: buffer size changed to %dx%d fmt 0x%x, updating output", w, h, fmt);
+                updateMode(w, h, fmt);
+            }
         }
     }
 
-    m_bufferCount = count;
-    m_buffersImported = true;
-    ANLAND_LOG("importBuffers: registered %d buffers", m_bufferCount);
+    ANLAND_LOG("importBuffers: registered %d buffers, format 0x%x", m_bufferCount, m_drmFormat);
 }
 
 bool CAnlandOutput::test() {
@@ -454,11 +474,8 @@ bool CAnlandOutput::commit() {
         reconfigureSwapchain();
     }
 
-    // 尝试初始化 EGL（如果尚未初始化且当前有上下文）
     if (!m_eglInitialized) {
         ensureEGLInitialized();
-        // 即使 EGL 未初始化，也继续执行，但可能无法创建 EGLImage
-        // 实际渲染时会再次尝试
     }
 
     m_selectedIndex = get_selected_idx(dpy);
@@ -477,7 +494,8 @@ bool CAnlandOutput::commit() {
 
     if (slot.buffer) {
         state->setBuffer(slot.buffer);
-        ANLAND_DEBUG("commit: using buffer %d (fd=%d)", m_selectedIndex, slot.buffer->dmabuf().fds[0]);
+        ANLAND_DEBUG("commit: using buffer %d (fd=%d, fmt=0x%x)",
+                     m_selectedIndex, slot.buffer->dmabuf().fds[0], slot.format);
     } else {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
     }
@@ -681,10 +699,21 @@ CSharedPointer<IBackendImplementation> CAnlandOutput::getBackend() {
 }
 
 std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
+    std::vector<SDRMFormat> formats;
+    formats.push_back({.drmFormat = m_drmFormat, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     if (m_backend) {
-        return m_backend->getRenderFormats();
+        auto backendFormats = m_backend->getRenderFormats();
+        for (const auto& fmt : backendFormats) {
+            if (fmt.drmFormat != m_drmFormat &&
+                fmt.drmFormat != DRM_FORMAT_XRGB8888 &&
+                fmt.drmFormat != DRM_FORMAT_ARGB8888) {
+                formats.push_back(fmt);
+            }
+        }
     }
-    return {};
+    return formats;
 }
 
 } // namespace Aquamarine

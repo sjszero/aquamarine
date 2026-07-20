@@ -10,9 +10,9 @@
 
 namespace Aquamarine {
 
-CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info, uint64_t modifier)
-    : m_info(info), m_modifier(modifier) {
-    // 复制 fd，确保生命周期独立
+CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info,
+                                   uint32_t drmFormat, uint64_t modifier)
+    : m_info(info), m_drmFormat(drmFormat), m_modifier(modifier) {
     m_ownedFd = dup(fd);
     if (m_ownedFd < 0) {
         ANLAND_ERROR("CAnlandDmaBuffer: dup failed for fd %d", fd);
@@ -22,8 +22,8 @@ CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info, uint64_t modifi
     m_fd = m_ownedFd;
     size = { (float)info.width, (float)info.height };
     opaque = true;
-    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d, size=%dx%d, format=0x%x, modifier=0x%lx",
-                 m_fd, info.width, info.height, info.format, modifier);
+    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d, size=%dx%d, drm_fmt=0x%x, modifier=0x%lx",
+                 m_fd, info.width, info.height, drmFormat, modifier);
 }
 
 CAnlandDmaBuffer::~CAnlandDmaBuffer() {
@@ -47,11 +47,9 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
 
     attrs.success = true;
     attrs.size = size;
-    attrs.format = m_info.format;
+    attrs.format = m_drmFormat;
     attrs.modifier = m_modifier;
     attrs.planes = 1;
-    // 注意：这里不复制 fd，而是传递原始 fd
-    // 调用者不应关闭它，因为 IBuffer 管理生命周期
     attrs.fds[0] = m_fd;
     attrs.offsets[0] = m_info.offset;
     attrs.strides[0] = m_info.stride;

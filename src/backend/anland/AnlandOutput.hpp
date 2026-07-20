@@ -68,6 +68,7 @@ public:
     display_ctx* display();
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
+    uint32_t getDrmFormat() const { return m_drmFormat; }
 
 private:
     bool importBuffer(int index);
@@ -75,7 +76,7 @@ private:
     void importBuffers();
     bool ensureEGLInitialized();
     void reconfigureSwapchain();
-    void updateMode(uint32_t width, uint32_t height);
+    void updateMode(uint32_t width, uint32_t height, uint32_t format);
 
     // 损伤跟踪
     struct BufferSlot {
