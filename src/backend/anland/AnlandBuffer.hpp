@@ -12,7 +12,7 @@ class CAnlandAllocator;
 
 class CAnlandDmaBuffer : public IBuffer {
 public:
-    CAnlandDmaBuffer(int fd, const buf_info& info);
+    CAnlandDmaBuffer(int fd, const buf_info& info, uint64_t modifier = DRM_FORMAT_MOD_INVALID);
     virtual ~CAnlandDmaBuffer();
 
     virtual eBufferCapability caps() override { return BUFFER_CAPABILITY_NONE; }
@@ -31,6 +31,7 @@ public:
 private:
     int m_fd = -1;
     buf_info m_info;
+    uint64_t m_modifier = DRM_FORMAT_MOD_INVALID;
 };
 
 } // namespace Aquamarine

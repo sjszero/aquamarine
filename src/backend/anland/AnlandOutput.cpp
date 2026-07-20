@@ -79,17 +79,18 @@ bool CAnlandOutput::ensureEGLInitialized() {
     if (m_eglInitialized && m_eglDisplay != EGL_NO_DISPLAY) return true;
 
     m_eglDisplay = eglGetCurrentDisplay();
-    if (m_eglDisplay != EGL_NO_DISPLAY) {
-        if (!initEGLFunctions()) {
-            ANLAND_ERR("ensureEGLInitialized: EGL functions not available");
-            return false;
-        }
-        m_eglInitialized = true;
-        return true;
+    if (m_eglDisplay == EGL_NO_DISPLAY) {
+        ANLAND_ERR("ensureEGLInitialized: no current EGL display");
+        return false;
     }
 
-    ANLAND_ERR("ensureEGLInitialized: no current EGL display");
-    return false;
+    if (!initEGLFunctions()) {
+        ANLAND_ERR("ensureEGLInitialized: EGL functions not available");
+        return false;
+    }
+
+    m_eglInitialized = true;
+    return true;
 }
 
 bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh) {
@@ -99,6 +100,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     m_width = width;
     m_height = height;
     m_refresh = refresh > 0 ? refresh : 60000;
+    m_drmFormat = DRM_FORMAT_XRGB8888;
 
     this->physicalSize = Hyprutils::Math::Vector2D(
         static_cast<float>(width) / 96.0f,
@@ -121,7 +123,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->enabled = true;
     this->state->setEnabled(true);
     this->state->setMode(mode);
-    this->state->setFormat(DRM_FORMAT_XRGB8888);
+    this->state->setFormat(m_drmFormat);
 
     m_outputReady = true;
     m_inFallback = true;
@@ -153,6 +155,42 @@ void CAnlandOutput::releaseBuffers() {
     ANLAND_TRACE("releaseBuffers END");
 }
 
+void CAnlandOutput::updateMode(uint32_t width, uint32_t height) {
+    if (width == m_width && height == m_height)
+        return;
+
+    ANLAND_LOG("updateMode: %dx%d -> %dx%d", m_width, m_height, width, height);
+    m_width = width;
+    m_height = height;
+
+    auto mode = CSharedPointer<SOutputMode>(
+        new SOutputMode{
+            .pixelSize = Hyprutils::Math::Vector2D((float)width, (float)height),
+            .refreshRate = m_refresh,
+            .preferred = true,
+        });
+    this->modes.clear();
+    this->modes.push_back(mode);
+    this->state->setMode(mode);
+
+    this->physicalSize = Hyprutils::Math::Vector2D(
+        static_cast<float>(width) / 96.0f,
+        static_cast<float>(height) / 96.0f
+    );
+
+    if (this->swapchain) {
+        SSwapchainOptions opts;
+        opts.length = m_bufferCount > 0 ? m_bufferCount : 3;
+        opts.size = Hyprutils::Math::Vector2D((float)width, (float)height);
+        opts.format = m_drmFormat;
+        opts.scanout = true;
+        this->swapchain->reconfigure(opts);
+        ANLAND_DEBUG("updateMode: swapchain reconfigured to %dx%d", width, height);
+    }
+
+    events.state.emit(IOutput::SStateEvent{.size = {width, height}});
+}
+
 void CAnlandOutput::reconfigureSwapchain() {
     ANLAND_TRACE("reconfigureSwapchain START");
     if (!m_buffersImported || m_bufferCount <= 0) {
@@ -165,13 +203,9 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
-    uint32_t actualFormat = DRM_FORMAT_XRGB8888;
-    auto firstBuf = getBuffer(0);
-    if (firstBuf) {
-        auto attrs = firstBuf->dmabuf();
-        if (attrs.success) {
-            actualFormat = attrs.format;
-        }
+    uint32_t actualFormat = m_drmFormat;
+    if (m_slots[0].imported && m_slots[0].format != 0) {
+        actualFormat = m_slots[0].format;
     }
 
     if (!this->swapchain) {
@@ -197,7 +231,7 @@ void CAnlandOutput::reconfigureSwapchain() {
         ANLAND_ERR("reconfigureSwapchain: failed to reconfigure");
         return;
     }
-    ANLAND_LOG("reconfigureSwapchain: success, %d buffers, format 0x%x, size %dx%d", 
+    ANLAND_LOG("reconfigureSwapchain: success, %d buffers, format 0x%x, size %dx%d",
                m_bufferCount, actualFormat, m_width, m_height);
 }
 
@@ -227,7 +261,20 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    slot->buffer = CSharedPointer<CAnlandDmaBuffer>(new CAnlandDmaBuffer(fd, info));
+    ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, format=0x%x, modifier=0x%lx, stride=%d",
+                 fd, info.width, info.height, info.format, info.modifier, info.stride);
+
+    if (!ensureEGLInitialized()) {
+        close(fd);
+        return false;
+    }
+
+    uint64_t modifier = info.modifier;
+    if (modifier == 0) {
+        modifier = DRM_FORMAT_MOD_INVALID;
+    }
+
+    slot->buffer = CSharedPointer<CAnlandDmaBuffer>(new CAnlandDmaBuffer(fd, info, modifier));
     close(fd);
     if (!slot->buffer->good()) {
         ANLAND_ERR("importBuffer: buffer not good");
@@ -235,14 +282,14 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    [[maybe_unused]] auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
+    auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
         ANLAND_TRACE("Buffer %d released", index);
         if (index < m_bufferCount && m_slots[index].buffer) {
             m_slots[index].inUse = false;
         }
     });
 
-    [[maybe_unused]] auto destroyListener = slot->buffer->events.destroy.listen([this, index]() {
+    auto destroyListener = slot->buffer->events.destroy.listen([this, index]() {
         ANLAND_TRACE("Buffer %d destroyed", index);
         if (index < m_bufferCount) {
             m_slots[index].inUse = false;
@@ -252,15 +299,15 @@ bool CAnlandOutput::importBuffer(int index) {
     slot->width = info.width;
     slot->height = info.height;
     slot->format = info.format;
-    slot->modifier = info.modifier;
+    slot->modifier = modifier;
     slot->offset = info.offset;
     slot->stride = info.stride;
     slot->imported = true;
     slot->hasDamage = true;
     slot->inUse = false;
-    slot->damage = CRegion(0, 0, info.width, info.height); // 初始全屏损伤
+    slot->damage = CRegion(0, 0, info.width, info.height);
 
-    ANLAND_LOG("importBuffer: slot %d registered", index);
+    ANLAND_LOG("importBuffer: slot %d registered (size %dx%d)", index, info.width, info.height);
     return true;
 }
 
@@ -312,10 +359,25 @@ void CAnlandOutput::importBuffers() {
         destroyBuffer(i);
     }
 
-    m_bufferCount = count;
     for (int i = 0; i < count; i++) {
-        importBuffer(i);
+        if (!importBuffer(i)) {
+            ANLAND_ERR("importBuffers: failed to import buffer %d", i);
+        }
     }
+
+    if (count > 0 && m_slots[0].imported) {
+        uint32_t w = m_slots[0].width;
+        uint32_t h = m_slots[0].height;
+        if (w > 0 && h > 0 && (w != m_width || h != m_height)) {
+            ANLAND_LOG("importBuffers: buffer size changed to %dx%d, updating output", w, h);
+            updateMode(w, h);
+        }
+        if (m_slots[0].format != 0) {
+            m_drmFormat = m_slots[0].format;
+        }
+    }
+
+    m_bufferCount = count;
     m_buffersImported = true;
     ANLAND_LOG("importBuffers: registered %d buffers", m_bufferCount);
 }
@@ -407,9 +469,8 @@ bool CAnlandOutput::commit() {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
     }
 
-    // 使用累积损伤
     state->addDamage(slot.damage);
-    slot.damage = CRegion(); // 清除已提交的损伤
+    slot.damage = CRegion();
 
     if (m_shouldTriggerRefresh) {
         m_shouldTriggerRefresh = false;
@@ -510,7 +571,6 @@ void CAnlandOutput::onBufferReady() {
         }
     }
 
-    // 释放缓冲区
     if (m_selectedIndex >= 0 && m_selectedIndex < m_bufferCount) {
         auto& slot = m_slots[m_selectedIndex];
         if (slot.buffer) {

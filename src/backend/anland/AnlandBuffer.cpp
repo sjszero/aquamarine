@@ -10,10 +10,12 @@
 
 namespace Aquamarine {
 
-CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info)
-    : m_fd(dup(fd)), m_info(info) {
+CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info, uint64_t modifier)
+    : m_fd(dup(fd)), m_info(info), m_modifier(modifier) {
     size = { (float)info.width, (float)info.height };
     opaque = true;
+    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d, size=%dx%d, format=0x%x, modifier=0x%lx",
+                 m_fd, info.width, info.height, info.format, modifier);
 }
 
 CAnlandDmaBuffer::~CAnlandDmaBuffer() {
@@ -37,7 +39,7 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
     attrs.success = true;
     attrs.size = size;
     attrs.format = m_info.format;
-    attrs.modifier = m_info.modifier;
+    attrs.modifier = m_modifier;
     attrs.planes = 1;
     attrs.fds[0] = m_fd;
     attrs.offsets[0] = m_info.offset;
@@ -47,7 +49,7 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
         attrs.offsets[i] = 0;
         attrs.strides[i] = 0;
     }
-    
+
     return attrs;
 }
 

@@ -75,6 +75,7 @@ private:
     void importBuffers();
     bool ensureEGLInitialized();
     void reconfigureSwapchain();
+    void updateMode(uint32_t width, uint32_t height);
 
     // 损伤跟踪
     struct BufferSlot {
@@ -93,7 +94,7 @@ private:
         bool imported = false;
         bool inUse = false;
         bool hasDamage = true;
-        Hyprutils::Math::CRegion damage; // 累积损伤
+        Hyprutils::Math::CRegion damage;
     };
 
     std::array<BufferSlot, MAX_BUFS> m_slots;
@@ -110,9 +111,10 @@ private:
     bool m_frameScheduled = false;
     CSharedPointer<std::function<void(void)>> m_frameIdle;
 
-    uint32_t m_width = 1920;
-    uint32_t m_height = 1080;
+    uint32_t m_width = 0;
+    uint32_t m_height = 0;
     uint32_t m_refresh = 60000;
+    uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
 
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     bool m_eglInitialized = false;
@@ -121,7 +123,6 @@ private:
     std::atomic<bool> m_destroying{false};
     std::atomic<bool> m_shutdownDone{false};
 
-    // 后端指针
     CAnlandBackend* m_backend = nullptr;
 };
 
