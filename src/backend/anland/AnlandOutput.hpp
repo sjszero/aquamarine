@@ -120,6 +120,9 @@ private:
     mutable std::mutex m_bufferMutex;
     std::atomic<bool> m_destroying{false};
     std::atomic<bool> m_shutdownDone{false};
+
+    // 后端指针
+    CAnlandBackend* m_backend = nullptr;
 };
 
 } // namespace Aquamarine

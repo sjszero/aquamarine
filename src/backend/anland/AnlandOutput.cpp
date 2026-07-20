@@ -235,14 +235,14 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
+    [[maybe_unused]] auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
         ANLAND_TRACE("Buffer %d released", index);
         if (index < m_bufferCount && m_slots[index].buffer) {
             m_slots[index].inUse = false;
         }
     });
 
-    auto destroyListener = slot->buffer->events.destroy.listen([this, index]() {
+    [[maybe_unused]] auto destroyListener = slot->buffer->events.destroy.listen([this, index]() {
         ANLAND_TRACE("Buffer %d destroyed", index);
         if (index < m_bufferCount) {
             m_slots[index].inUse = false;
