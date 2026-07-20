@@ -87,10 +87,6 @@ private:
         uint32_t offset = 0;
         uint32_t stride = 0;
 
-        EGLImageKHR eglImage = EGL_NO_IMAGE_KHR;
-        GLuint texture = 0;
-        GLuint framebuffer = 0;
-
         CSharedPointer<CAnlandDmaBuffer> buffer;
         bool imported = false;
         bool inUse = false;
@@ -116,9 +112,6 @@ private:
     uint32_t m_height = 0;
     uint32_t m_refresh = 60000;
     uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
-
-    EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
-    bool m_eglInitialized = false;
 
     mutable std::mutex m_bufferMutex;
     std::atomic<bool> m_destroying{false};

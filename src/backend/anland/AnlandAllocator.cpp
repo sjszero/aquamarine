@@ -41,7 +41,7 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
 
     int start = (m_lastAcquired + 1) % count;
     int idx = start;
-    
+
     for (int i = 0; i < count; i++) {
         auto buf = m_output->getBuffer(idx);
         if (buf && buf->good() && !buf->inUse) {
@@ -53,6 +53,7 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
         idx = (idx + 1) % count;
     }
 
+    // 如果没有空闲缓冲区，尝试复用第一个
     auto buf = m_output->getBuffer(start);
     if (buf && buf->good()) {
         ANLAND_DEBUG("acquire: reusing buffer %d (all busy)", start);

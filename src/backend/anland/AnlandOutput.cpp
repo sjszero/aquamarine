@@ -68,9 +68,7 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     for (int i = 0; i < MAX_BUFS; i++) {
         m_slots[i].imported = false;
         m_slots[i].fd = -1;
-        m_slots[i].framebuffer = 0;
-        m_slots[i].texture = 0;
-        m_slots[i].eglImage = EGL_NO_IMAGE_KHR;
+        m_slots[i].buffer = nullptr;
     }
     m_shouldTriggerRefresh = false;
     ANLAND_TRACE("CAnlandOutput constructor END");
@@ -90,21 +88,8 @@ display_ctx* CAnlandOutput::display() {
 }
 
 bool CAnlandOutput::ensureEGLInitialized() {
-    if (m_eglInitialized && m_eglDisplay != EGL_NO_DISPLAY) return true;
-
-    m_eglDisplay = eglGetCurrentDisplay();
-    if (m_eglDisplay == EGL_NO_DISPLAY) {
-        ANLAND_DEBUG("ensureEGLInitialized: no current EGL display, will retry later");
-        return false;
-    }
-
-    if (!initEGLFunctions()) {
-        ANLAND_ERR("ensureEGLInitialized: EGL functions not available");
-        return false;
-    }
-
-    m_eglInitialized = true;
-    ANLAND_DEBUG("ensureEGLInitialized: EGL initialized successfully");
+    // 我们实际上不需要在 AnlandOutput 中初始化 EGL
+    // EGL 初始化由 Hyprland 的渲染器完成
     return true;
 }
 
@@ -224,9 +209,6 @@ void CAnlandOutput::reconfigureSwapchain() {
     }
 
     uint32_t actualFormat = m_drmFormat;
-    if (m_slots[0].imported && m_slots[0].format != 0) {
-        actualFormat = m_slots[0].format;
-    }
 
     if (!this->swapchain) {
         auto alloc = CAnlandAllocator::create(this);
@@ -281,21 +263,17 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 关键修复：协议格式 -> DRM 格式
+    // 协议格式 -> DRM 格式
     uint32_t drmFormat = protocol_format_to_drm(info.format);
     uint64_t modifier = info.modifier;
     if (modifier == 0) {
         modifier = DRM_FORMAT_MOD_INVALID;
     }
 
-    ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, protocol_fmt=0x%x -> drm_fmt=0x%x, modifier=0x%lx, stride=%d",
-                 fd, info.width, info.height, info.format, drmFormat, modifier, info.stride);
+    ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, protocol_fmt=0x%x -> drm_fmt=0x%x, modifier=0x%lx",
+                 fd, info.width, info.height, info.format, drmFormat, modifier);
 
-    if (!ensureEGLInitialized()) {
-        close(fd);
-        return false;
-    }
-
+    // 创建缓冲区对象（不依赖 EGL）
     slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
         new CAnlandDmaBuffer(fd, info, drmFormat, modifier));
     close(fd);
@@ -339,23 +317,6 @@ bool CAnlandOutput::importBuffer(int index) {
 void CAnlandOutput::destroyBuffer(int index) {
     if (index < 0 || index >= MAX_BUFS || m_destroying) return;
     auto* slot = &m_slots[index];
-
-    if (slot->framebuffer) {
-        glDeleteFramebuffers(1, &slot->framebuffer);
-        slot->framebuffer = 0;
-    }
-    if (slot->texture) {
-        glDeleteTextures(1, &slot->texture);
-        slot->texture = 0;
-    }
-    if (slot->eglImage != EGL_NO_IMAGE_KHR && m_eglDisplay != EGL_NO_DISPLAY && g_eglDestroyImageKHR) {
-        g_eglDestroyImageKHR(m_eglDisplay, slot->eglImage);
-        slot->eglImage = EGL_NO_IMAGE_KHR;
-    }
-    if (slot->fd >= 0) {
-        close(slot->fd);
-        slot->fd = -1;
-    }
     slot->buffer = nullptr;
     slot->imported = false;
     slot->inUse = false;
@@ -472,10 +433,6 @@ bool CAnlandOutput::commit() {
             return true;
         }
         reconfigureSwapchain();
-    }
-
-    if (!m_eglInitialized) {
-        ensureEGLInitialized();
     }
 
     m_selectedIndex = get_selected_idx(dpy);
