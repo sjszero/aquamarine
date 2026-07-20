@@ -23,22 +23,6 @@ using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::Math::CRegion;
 
-static PFNEGLCREATEIMAGEKHRPROC g_eglCreateImageKHR = nullptr;
-static PFNEGLDESTROYIMAGEKHRPROC g_eglDestroyImageKHR = nullptr;
-static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC g_glEGLImageTargetTexture2DOES = nullptr;
-static bool g_eglFunctionsInitialized = false;
-
-static bool initEGLFunctions() {
-    if (g_eglFunctionsInitialized) {
-        return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr;
-    }
-    g_eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-    g_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
-    g_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
-    g_eglFunctionsInitialized = true;
-    return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr && g_glEGLImageTargetTexture2DOES != nullptr;
-}
-
 /* ============================================================
  * protocol_format_to_drm - 将协议格式转换为 DRM fourcc
  * 消费者使用 Android 的像素格式枚举:
@@ -87,12 +71,6 @@ display_ctx* CAnlandOutput::display() {
     return m_backend->display();
 }
 
-bool CAnlandOutput::ensureEGLInitialized() {
-    // 我们实际上不需要在 AnlandOutput 中初始化 EGL
-    // EGL 初始化由 Hyprland 的渲染器完成
-    return true;
-}
-
 bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh) {
     ANLAND_TRACE("initialize START: %dx%d @ %d mHz", width, height, refresh);
     if (m_destroying) return false;
@@ -124,6 +102,10 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setEnabled(true);
     this->state->setMode(mode);
     this->state->setFormat(m_drmFormat);
+
+    // 设置默认图像描述，防止渲染器访问空指针
+    // 使用 sRGB 描述作为默认
+    this->state->setGammaLut({});
 
     m_outputReady = true;
     m_inFallback = true;
@@ -263,7 +245,6 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 协议格式 -> DRM 格式
     uint32_t drmFormat = protocol_format_to_drm(info.format);
     uint64_t modifier = info.modifier;
     if (modifier == 0) {
@@ -273,7 +254,6 @@ bool CAnlandOutput::importBuffer(int index) {
     ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, protocol_fmt=0x%x -> drm_fmt=0x%x, modifier=0x%lx",
                  fd, info.width, info.height, info.format, drmFormat, modifier);
 
-    // 创建缓冲区对象（不依赖 EGL）
     slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
         new CAnlandDmaBuffer(fd, info, drmFormat, modifier));
     close(fd);

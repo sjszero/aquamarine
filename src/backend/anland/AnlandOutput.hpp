@@ -74,7 +74,6 @@ private:
     bool importBuffer(int index);
     void destroyBuffer(int index);
     void importBuffers();
-    bool ensureEGLInitialized();
     void reconfigureSwapchain();
     void updateMode(uint32_t width, uint32_t height, uint32_t format);
 
