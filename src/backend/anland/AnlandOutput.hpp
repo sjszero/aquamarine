@@ -1,3 +1,4 @@
+// src/backend/anland/AnlandOutput.hpp
 #ifndef AQUAMARINE_ANLAND_OUTPUT_HPP
 #define AQUAMARINE_ANLAND_OUTPUT_HPP
 
@@ -75,8 +76,7 @@ private:
     bool ensureEGLInitialized();
     void reconfigureSwapchain();
 
-    CAnlandBackend* m_backend = nullptr;
-
+    // 损伤跟踪
     struct BufferSlot {
         int fd = -1;
         uint32_t width = 0, height = 0;
@@ -93,6 +93,7 @@ private:
         bool imported = false;
         bool inUse = false;
         bool hasDamage = true;
+        Hyprutils::Math::CRegion damage; // 累积损伤
     };
 
     std::array<BufferSlot, MAX_BUFS> m_slots;
@@ -105,8 +106,6 @@ private:
     bool m_shouldTriggerRefresh = false;
     std::atomic<bool> m_framePending{false};
     std::atomic<bool> m_commitInProgress{false};
-
-    // 注意：使用基类的 swapchain 成员，不在此处定义自己的 swapchain
 
     bool m_frameScheduled = false;
     CSharedPointer<std::function<void(void)>> m_frameIdle;

@@ -58,16 +58,16 @@ static const char* backendTypeToName(eBackendType type) {
     return "invalid";
 }
 
-static bool hasAnlandImplementation(const std::vector<SP<IBackendImplementation>>& impls) {
 #ifdef HAS_ANLAND_BACKEND
+static bool hasAnlandImplementation(const std::vector<SP<IBackendImplementation>>& impls) {
     for (auto const& impl : impls) {
         if (impl->type() == AQ_BACKEND_ANLAND) {
             return true;
         }
     }
-#endif
     return false;
 }
+#endif
 
 /* ============================================================
  * SBackendImplementationOptions
@@ -301,7 +301,11 @@ bool Aquamarine::CBackend::start() {
      * Anland 后端使用消费者提供的 dmabuf，不需要 GBM 分配器。
      * 只有非 Anland 后端才需要 GBM。
      * ============================================================ */
+#ifdef HAS_ANLAND_BACKEND
     bool hasAnland = hasAnlandImplementation(implementations);
+#else
+    bool hasAnland = false;
+#endif
 
     if (!hasAnland) {
         // 优先使用 DRM 后端创建 GBM 分配器

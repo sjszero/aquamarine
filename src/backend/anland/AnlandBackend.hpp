@@ -74,6 +74,8 @@ private:
     void handleResourceEvent(const InputEvent& ev);
     void updateAudioFd();
     void updateCameraResources();
+    void updateClipboard(const InputEvent& ev);
+    void updateTextInput(const InputEvent& ev);
 
     int openDummyDRM();
 

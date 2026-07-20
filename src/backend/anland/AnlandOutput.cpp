@@ -96,7 +96,6 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     ANLAND_TRACE("initialize START: %dx%d @ %d mHz", width, height, refresh);
     if (m_destroying) return false;
 
-    // 输出大小 - 由 Hyprland 配置决定，与 dmabuf 大小无关
     m_width = width;
     m_height = height;
     m_refresh = refresh > 0 ? refresh : 60000;
@@ -172,7 +171,6 @@ void CAnlandOutput::reconfigureSwapchain() {
         auto attrs = firstBuf->dmabuf();
         if (attrs.success) {
             actualFormat = attrs.format;
-            ANLAND_DEBUG("reconfigureSwapchain: using actual format 0x%x", actualFormat);
         }
     }
 
@@ -189,7 +187,6 @@ void CAnlandOutput::reconfigureSwapchain() {
         }
     }
 
-    // 关键：使用输出大小，而不是 dmabuf 大小
     SSwapchainOptions opts;
     opts.length = m_bufferCount;
     opts.size = Hyprutils::Math::Vector2D((float)m_width, (float)m_height);
@@ -230,9 +227,6 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, format=0x%x, stride=%d", 
-                 fd, info.width, info.height, info.format, info.stride);
-
     slot->buffer = CSharedPointer<CAnlandDmaBuffer>(new CAnlandDmaBuffer(fd, info));
     close(fd);
     if (!slot->buffer->good()) {
@@ -241,14 +235,14 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    [[maybe_unused]] auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
+    auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
         ANLAND_TRACE("Buffer %d released", index);
         if (index < m_bufferCount && m_slots[index].buffer) {
             m_slots[index].inUse = false;
         }
     });
 
-    [[maybe_unused]] auto destroyListener = slot->buffer->events.destroy.listen([this, index]() {
+    auto destroyListener = slot->buffer->events.destroy.listen([this, index]() {
         ANLAND_TRACE("Buffer %d destroyed", index);
         if (index < m_bufferCount) {
             m_slots[index].inUse = false;
@@ -264,6 +258,7 @@ bool CAnlandOutput::importBuffer(int index) {
     slot->imported = true;
     slot->hasDamage = true;
     slot->inUse = false;
+    slot->damage = CRegion(0, 0, info.width, info.height); // 初始全屏损伤
 
     ANLAND_LOG("importBuffer: slot %d registered", index);
     return true;
@@ -293,6 +288,7 @@ void CAnlandOutput::destroyBuffer(int index) {
     slot->imported = false;
     slot->inUse = false;
     slot->hasDamage = true;
+    slot->damage = CRegion();
 }
 
 void CAnlandOutput::importBuffers() {
@@ -411,8 +407,9 @@ bool CAnlandOutput::commit() {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
     }
 
-    // 使用输出大小，不是 dmabuf 大小
-    state->addDamage(CRegion(0, 0, (int)m_width, (int)m_height));
+    // 使用累积损伤
+    state->addDamage(slot.damage);
+    slot.damage = CRegion(); // 清除已提交的损伤
 
     if (m_shouldTriggerRefresh) {
         m_shouldTriggerRefresh = false;
@@ -510,6 +507,15 @@ void CAnlandOutput::onBufferReady() {
         uint64_t val;
         if (read(fd, &val, sizeof(val)) < 0 && errno != EAGAIN) {
             ANLAND_ERR("onBufferReady: read failed: %s", strerror(errno));
+        }
+    }
+
+    // 释放缓冲区
+    if (m_selectedIndex >= 0 && m_selectedIndex < m_bufferCount) {
+        auto& slot = m_slots[m_selectedIndex];
+        if (slot.buffer) {
+            slot.buffer->sendRelease();
+            ANLAND_DEBUG("onBufferReady: released buffer %d", m_selectedIndex);
         }
     }
 

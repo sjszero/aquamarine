@@ -29,4 +29,4 @@ private:
 
 } // namespace Aquamarine
 
-#endif // AQUAMARINE_ANLAND_POINTER_HPP
+#endif

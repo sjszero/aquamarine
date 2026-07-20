@@ -17,7 +17,6 @@ class CAnlandOutput;
 class CAnlandDmaBuffer;
 class CBackend;
 
-// 最小化分配器：不分配新内存，只返回 CAnlandOutput 已注册的缓冲区
 class CAnlandAllocator : public IAllocator {
 public:
     static CSharedPointer<IAllocator> create(CAnlandOutput* output);

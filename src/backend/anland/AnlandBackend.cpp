@@ -45,14 +45,12 @@ int CAnlandBackend::openDummyDRM() {
             drmVersion* ver = drmGetVersion(fd);
             if (ver) {
                 drmFreeVersion(ver);
-                ANLAND_LOG("Opened dummy DRM device: %s (fd=%d)", paths[i], fd);
                 return fd;
             }
             close(fd);
         }
     }
 
-    ANLAND_ERR("Failed to open any DRM device for EGL initialization");
     return -1;
 }
 
@@ -107,12 +105,10 @@ bool CAnlandBackend::start() {
 }
 
 bool CAnlandBackend::tryConnect() {
-    ANLAND_TRACE("tryConnect START");
     if (m_destroying) return false;
     std::lock_guard<std::mutex> lock(m_connectMutex);
 
     if (!m_display) {
-        ANLAND_TRACE("tryConnect: connecting to daemon");
         display_ctx* display = nullptr;
         if (connect_to_deamon(&display, m_socketPath.c_str()) < 0 || !display) {
             ANLAND_LOG("connect_to_daemon failed");
@@ -134,7 +130,6 @@ bool CAnlandBackend::tryConnect() {
     createOutputIfNeeded();
 
     for (int attempt = 0; attempt < 100; attempt++) {
-        ANLAND_TRACE("tryConnect: attempt %d", attempt);
         if (m_destroying) return false;
         if (try_exit_fallback(m_display) == 0) {
             m_inFallback = false;
@@ -144,11 +139,8 @@ bool CAnlandBackend::tryConnect() {
             updateCameraResources();
 
             if (m_output) {
-                ANLAND_TRACE("tryConnect: exiting fallback on output");
                 m_output->exitFallback();
-                ANLAND_TRACE("tryConnect: emitting frame event");
                 m_output->events.frame.emit();
-                ANLAND_TRACE("tryConnect: scheduling frame");
                 m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_CONNECTOR);
             }
 
@@ -171,7 +163,6 @@ void CAnlandBackend::onReady() {
         m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_MONITOR);
         m_output->events.frame.emit();
     }
-    ANLAND_LOG("onReady done: fallback=%d", m_inFallback);
 }
 
 void CAnlandBackend::enterFallback() {
@@ -336,6 +327,14 @@ void CAnlandBackend::handleInputEvent(const InputEvent& ev) {
             handleResourceEvent(ev);
             break;
 
+        case INPUT_TYPE_CLIPBOARD:
+            updateClipboard(ev);
+            break;
+
+        case INPUT_TYPE_TEXT_INPUT:
+            updateTextInput(ev);
+            break;
+
         case INPUT_TYPE_POINTER_MOTION: {
             if (!m_pointer) {
                 m_pointer = CSharedPointer<CAnlandPointer>(new CAnlandPointer(this));
@@ -447,10 +446,6 @@ std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XRGB2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_ARGB2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XBGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_ABGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     return formats;
 }
 

@@ -15,6 +15,102 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  }
  
  void CCompositor::setRandomSplash() {
+@@ -344,17 +351,43 @@ void CCompositor::initServer(std::string socketName, int socketFd) {
+     conn->setName("aquamarine");
+     options.logConnection = std::move(conn);
+ 
++    // Anland: 检测是否需要使用 Anland 后端
++    const bool useAnland = getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0;
++
+     std::vector<Aquamarine::SBackendImplementationOptions> implementations;
+     Aquamarine::SBackendImplementationOptions              option;
+-    option.backendType        = Aquamarine::eBackendType::AQ_BACKEND_HEADLESS;
+-    option.backendRequestMode = Aquamarine::eBackendRequestMode::AQ_BACKEND_REQUEST_MANDATORY;
+-    implementations.emplace_back(option);
+-    option.backendType        = Aquamarine::eBackendType::AQ_BACKEND_DRM;
+-    option.backendRequestMode = Aquamarine::eBackendRequestMode::AQ_BACKEND_REQUEST_IF_AVAILABLE;
+-    implementations.emplace_back(option);
+-    option.backendType        = Aquamarine::eBackendType::AQ_BACKEND_WAYLAND;
+-    option.backendRequestMode = Aquamarine::eBackendRequestMode::AQ_BACKEND_REQUEST_FALLBACK;
+-    implementations.emplace_back(option);
++
++    if (useAnland) {
++#ifdef HAS_ANLAND_BACKEND
++        Log::logger->log(Log::DEBUG, "Using Anland backend (Android display)");
++
++        option.backendType        = Aquamarine::eBackendType::AQ_BACKEND_ANLAND;
++        option.backendRequestMode = Aquamarine::eBackendRequestMode::AQ_BACKEND_REQUEST_MANDATORY;
++        implementations.emplace_back(option);
++
++        // Headless 作为 fallback（当消费者断开时）
++        option.backendType        = Aquamarine::eBackendType::AQ_BACKEND_HEADLESS;
++        option.backendRequestMode = Aquamarine::eBackendRequestMode::AQ_BACKEND_REQUEST_FALLBACK;
++        implementations.emplace_back(option);
++#else
++        Log::logger->log(Log::ERR, "Anland backend requested but not built (missing HAS_ANLAND_BACKEND)");
++        // Fallback to Headless
++        option.backendType        = Aquamarine::eBackendType::AQ_BACKEND_HEADLESS;
++        option.backendRequestMode = Aquamarine::eBackendRequestMode::AQ_BACKEND_REQUEST_MANDATORY;
++        implementations.emplace_back(option);
++#endif
++    } else {
++        // 标准后端配置
++        option.backendType        = Aquamarine::eBackendType::AQ_BACKEND_HEADLESS;
++        option.backendRequestMode = Aquamarine::eBackendRequestMode::AQ_BACKEND_REQUEST_MANDATORY;
++        implementations.emplace_back(option);
++        option.backendType        = Aquamarine::eBackendType::AQ_BACKEND_DRM;
++        option.backendRequestMode = Aquamarine::eBackendRequestMode::AQ_BACKEND_REQUEST_IF_AVAILABLE;
++        implementations.emplace_back(option);
++        option.backendType        = Aquamarine::eBackendType::AQ_BACKEND_WAYLAND;
++        option.backendRequestMode = Aquamarine::eBackendRequestMode::AQ_BACKEND_REQUEST_FALLBACK;
++        implementations.emplace_back(option);
++    }
+ 
+     m_aqBackend = CBackend::create(implementations, options);
+ 
+@@ -540,6 +575,14 @@ void CCompositor::initAllSignals() {
+ }
+ 
+ void CCompositor::removeAllSignals() {
++    // Anland: 清理后端资源
++    if (m_aqBackend) {
++        for (auto const& impl : m_aqBackend->getImplementations()) {
++            if (impl->type() == Aquamarine::AQ_BACKEND_ANLAND) {
++                // CAnlandBackend 会在析构时清理自身
++            }
++        }
++    }
+     ;
+ }
+ 
+@@ -558,6 +600,12 @@ void CCompositor::cleanEnvironment() {
+ 
+ void CCompositor::stopCompositor() {
+     Log::logger->log(Log::DEBUG, "Hyprland is stopping!");
+ 
++    // Anland: 清理环境
++    if (getenv("ANLAND")) {
++        unsetenv("ANLAND");
++        unsetenv("EGL_PLATFORM");
++    }
++
+     // this stops the wayland loop, wl_display_run
+     wl_display_terminate(m_wlDisplay);
+@@ -1064,6 +1113,14 @@ void CCompositor::createLockFile() {
+ 
+ void CCompositor::removeLockFile() {
+     const auto PATH = m_instancePath + "/hyprland.lock";
+ 
++    // Anland: 清理环境
++    if (getenv("ANLAND")) {
++        unsetenv("ANLAND");
++        unsetenv("EGL_PLATFORM");
++        // 不清理 ANLAND_SOCKET，可能被其他进程使用
++    }
++
++    // Anland: 清理环境
+     if (std::filesystem::exists(PATH))
+         std::filesystem::remove(PATH);
 diff --git a/src/main.cpp b/src/main.cpp
 --- a/src/main.cpp
 +++ b/src/main.cpp
@@ -62,3 +158,33 @@ diff --git a/src/main.cpp b/src/main.cpp
      if (!ignoreSudo && NInit::isSudo()) {
          std::println(stderr,
                       "[ ERROR ] Hyprland was launched with superuser privileges, but the privileges check is not omitted.\n"
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -286,6 +286,15 @@ if(USE_TRACY)
+   endif()
+ endif()
+ 
++# ============================================================
++# Anland 后端支持
++# ============================================================
++option(ENABLE_ANLAND "Enable Anland (Android display) backend" OFF)
++if(ENABLE_ANLAND)
++    add_compile_definitions(HAS_ANLAND_BACKEND)
++    message(STATUS "Anland backend support enabled")
++endif()
++
+ if(BUILT_WITH_NIX)
+   add_compile_definitions(BUILT_WITH_NIX)
+ endif()
+diff --git a/src/Compositor.hpp b/src/Compositor.hpp
+--- a/src/Compositor.hpp
++++ b/src/Compositor.hpp
+@@ -53,6 +53,7 @@ class CCompositor {
+     bool                                         m_unsafeState    = false; // unsafe state is when there is no monitors
+     PHLMONITORREF                                m_unsafeOutput;           // fallback output for the unsafe state
+     bool                                         m_isShuttingDown         = false;
++    bool                                         m_useAnland              = false; // Anland: 是否使用 Anland 后端
+     bool                                         m_finalRequests          = false;
+     bool                                         m_desktopEnvSet          = false;
+     bool                                         m_wantsXwayland          = true;

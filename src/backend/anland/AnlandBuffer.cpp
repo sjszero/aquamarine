@@ -12,10 +12,7 @@ namespace Aquamarine {
 
 CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info)
     : m_fd(dup(fd)), m_info(info) {
-    // size 直接使用 dmabuf 的实际大小
     size = { (float)info.width, (float)info.height };
-    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d, size=%dx%d, format=0x%x, modifier=0x%lx, stride=%d, offset=%d",
-                 m_fd, info.width, info.height, info.format, info.modifier, info.stride, info.offset);
     opaque = true;
 }
 
@@ -38,10 +35,8 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
     }
 
     attrs.success = true;
-    // size 使用 dmabuf 的实际大小
     attrs.size = size;
     attrs.format = m_info.format;
-    // 关键：使用原始 modifier（0），而不是强制 INVALID
     attrs.modifier = m_info.modifier;
     attrs.planes = 1;
     attrs.fds[0] = m_fd;
@@ -53,8 +48,6 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
         attrs.strides[i] = 0;
     }
     
-    ANLAND_DEBUG("dmabuf: fd=%d, size=%.0fx%.0f, format=0x%x, modifier=0x%lx, stride=%d, offset=%d",
-                 m_fd, size.x, size.y, attrs.format, attrs.modifier, attrs.strides[0], attrs.offsets[0]);
     return attrs;
 }
 

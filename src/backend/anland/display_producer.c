@@ -13,59 +13,33 @@
 #include <unistd.h>
 #include <stdio.h>
 
-/*
- * 握手超时（毫秒）
- */
 #define HANDSHAKE_TIMEOUT_MS 5000
 
-/*
- * 显示上下文结构
- */
 struct display_ctx {
-    /* 控制通道 */
     int ctrl_fd;
-
-    /* 数据通道 */
     int data_fd;
-
-    /* Buffer ready eventfd（消费者 -> 生产者） */
     int buf_ready_efd;
-
-    /* 渲染栅栏通道（生产者 -> 消费者） */
     int fence_fd;
-
-    /* 共享内存（缓冲区索引） */
     int shm_fd;
     volatile uint32_t *shm_ptr;
-
-    /* 音频通道 */
     int audio_fd;
-
-    /* 待发送的渲染栅栏 */
     int pending_render_fence;
 
-    /* 屏幕信息 */
     uint32_t screen_w, screen_h;
     uint32_t pixel_format;
     uint32_t refresh;
 
-    /* 状态 */
     bool fallback;
     bool in_fallback_callback;
 
-    /* dmabuf 缓冲区 */
     int dmabuf_fds[MAX_BUFS];
     struct buf_info dmabuf_infos[MAX_BUFS];
     int buf_count;
 
-    /* Fallback 回调 */
     void (*fallback_cb)(void *);
     void *fallback_userdata;
 };
 
-/*
- * 释放所有消费者资源
- */
 static void release_consumer_resources(display_ctx *ctx)
 {
     for (int i = 0; i < ctx->buf_count; i++) {
@@ -106,9 +80,6 @@ static void release_consumer_resources(display_ctx *ctx)
     }
 }
 
-/*
- * 进入 fallback 状态
- */
 static void enter_fallback(display_ctx *ctx)
 {
     if (ctx->fallback || ctx->in_fallback_callback)
@@ -127,7 +98,6 @@ static void enter_fallback(display_ctx *ctx)
 
         cb(userdata);
 
-        /* 恢复回调（以防被覆盖） */
         if (ctx->fallback_cb == NULL) {
             ctx->fallback_cb = cb;
             ctx->fallback_userdata = userdata;
@@ -136,9 +106,6 @@ static void enter_fallback(display_ctx *ctx)
     }
 }
 
-/*
- * 拾取消费者资源
- */
 static int pickup_fds(display_ctx *ctx)
 {
     fprintf(stderr, "ANLAND: pickup_fds() start\n");
@@ -148,7 +115,6 @@ static int pickup_fds(display_ctx *ctx)
         fprintf(stderr, "ANLAND: pickup_fds() send_all failed\n");
         return -1;
     }
-    fprintf(stderr, "ANLAND: pickup_fds() sent PICKUP_FDS, waiting...\n");
 
     struct pollfd pfd = { .fd = ctx->ctrl_fd, .events = POLLIN };
     int ret = poll(&pfd, 1, HANDSHAKE_TIMEOUT_MS);
@@ -166,8 +132,6 @@ static int pickup_fds(display_ctx *ctx)
         return -1;
     }
 
-    fprintf(stderr, "ANLAND: pickup_fds() type=%d, fd_count=%d\n", resp.type, fd_count);
-
     if (resp.type != CTRL_MSG_FDS_READY || fd_count < 5) {
         fprintf(stderr, "ANLAND: pickup_fds() invalid response\n");
         for (int i = 0; i < fd_count; i++)
@@ -175,16 +139,11 @@ static int pickup_fds(display_ctx *ctx)
         return -1;
     }
 
-    /* 顺序：buf_ready, fence, data, shm, audio */
     ctx->buf_ready_efd = fds[0];
     ctx->fence_fd      = fds[1];
     ctx->data_fd       = fds[2];
     ctx->shm_fd        = fds[3];
     ctx->audio_fd      = fds[4];
-
-    fprintf(stderr, "ANLAND: fds: buf_ready=%d, fence=%d, data=%d, shm=%d, audio=%d\n",
-            ctx->buf_ready_efd, ctx->fence_fd, ctx->data_fd,
-            ctx->shm_fd, ctx->audio_fd);
 
     ctx->shm_ptr = mmap(NULL, sizeof(uint32_t), PROT_READ, MAP_SHARED,
                         ctx->shm_fd, 0);
@@ -198,9 +157,6 @@ static int pickup_fds(display_ctx *ctx)
     return 0;
 }
 
-/*
- * 接收 dmabuf 缓冲区
- */
 static int receive_dmabufs(display_ctx *ctx)
 {
     if (ctx->buf_count > 0) {
@@ -208,8 +164,6 @@ static int receive_dmabufs(display_ctx *ctx)
                 ctx->buf_count);
         return 0;
     }
-
-    fprintf(stderr, "ANLAND: receive_dmabufs() waiting for dmabufs...\n");
 
     struct pollfd pfd = {
         .fd = ctx->data_fd,
@@ -238,9 +192,6 @@ static int receive_dmabufs(display_ctx *ctx)
         return -1;
     }
 
-    fprintf(stderr, "ANLAND: receive_dmabufs() type=%d, size=%d, fd_count=%d\n",
-            dhdr.type, dhdr.size, fd_count);
-
     if (dhdr.type != DATA_MSG_BUFS_READY) {
         fprintf(stderr, "ANLAND: receive_dmabufs() invalid type: %d\n", dhdr.type);
         for (int i = 0; i < fd_count; i++)
@@ -267,8 +218,6 @@ static int receive_dmabufs(display_ctx *ctx)
     for (int i = 0; i < count; i++) {
         ctx->dmabuf_fds[i] = fds[i];
         ctx->dmabuf_infos[i] = infos[i];
-        fprintf(stderr, "ANLAND: buffer %d: %dx%d fd=%d\n",
-                i, infos[i].width, infos[i].height, fds[i]);
     }
     ctx->buf_count = count;
 
@@ -276,18 +225,12 @@ static int receive_dmabufs(display_ctx *ctx)
     return 0;
 }
 
-/*
- * 连接到显示守护进程
- */
 int connect_to_deamon(display_ctx **out, const char *socket_path)
 {
-    fprintf(stderr, "ANLAND: connect_to_deamon() socket=%s\n", socket_path);
-
     display_ctx *ctx = calloc(1, sizeof(*ctx));
     if (!ctx)
         return -1;
 
-    /* 初始化 */
     ctx->ctrl_fd = -1;
     ctx->data_fd = -1;
     ctx->buf_ready_efd = -1;
@@ -297,26 +240,21 @@ int connect_to_deamon(display_ctx **out, const char *socket_path)
     ctx->pending_render_fence = -1;
     ctx->shm_ptr = NULL;
     ctx->fallback = true;
-    ctx->in_fallback_callback = false;
     for (int i = 0; i < MAX_BUFS; i++)
         ctx->dmabuf_fds[i] = -1;
 
-    /* 连接控制通道 */
     ctx->ctrl_fd = connect_unix(socket_path);
     if (ctx->ctrl_fd < 0) {
         fprintf(stderr, "ANLAND: connect_unix() failed\n");
         goto fail;
     }
-    fprintf(stderr, "ANLAND: connect_unix() success, fd=%d\n", ctx->ctrl_fd);
 
-    /* 发送 PRODUCER_HELLO */
     struct ctrl_msg hdr = { .type = CTRL_MSG_PRODUCER_HELLO, .size = 0 };
     if (send_all(ctx->ctrl_fd, &hdr, sizeof(hdr)) < 0) {
         fprintf(stderr, "ANLAND: send_all(PRODUCER_HELLO) failed\n");
         goto fail;
     }
 
-    /* 接收 SCREEN_INFO */
     uint8_t buf[sizeof(struct ctrl_msg) + sizeof(struct screen_info)];
     if (recv_all(ctx->ctrl_fd, buf, sizeof(buf)) < 0) {
         fprintf(stderr, "ANLAND: recv_all(SCREEN_INFO) failed\n");
@@ -339,9 +277,6 @@ int connect_to_deamon(display_ctx **out, const char *socket_path)
     ctx->pixel_format = si.format;
     ctx->refresh = si.refresh;
 
-    fprintf(stderr, "ANLAND: screen info: %dx%d refresh=%d mHz\n",
-            si.width, si.height, si.refresh);
-
     *out = ctx;
     return 0;
 
@@ -352,9 +287,6 @@ fail:
     return -1;
 }
 
-/*
- * 断开连接
- */
 void disconnect(display_ctx *ctx)
 {
     if (!ctx)
@@ -365,9 +297,6 @@ void disconnect(display_ctx *ctx)
     free(ctx);
 }
 
-/*
- * 获取屏幕信息
- */
 int get_screen_info(display_ctx *ctx, uint32_t *width, uint32_t *height,
                     uint32_t *format, uint32_t *refresh)
 {
@@ -379,9 +308,6 @@ int get_screen_info(display_ctx *ctx, uint32_t *width, uint32_t *height,
     return 0;
 }
 
-/*
- * 设置渲染栅栏
- */
 void set_render_fence(display_ctx *ctx, int fence_fd)
 {
     if (ctx->pending_render_fence >= 0)
@@ -389,9 +315,6 @@ void set_render_fence(display_ctx *ctx, int fence_fd)
     ctx->pending_render_fence = fence_fd;
 }
 
-/*
- * 触发刷新
- */
 int trigger_refresh(display_ctx *ctx)
 {
     if (ctx->fallback) {
@@ -435,9 +358,6 @@ int trigger_refresh(display_ctx *ctx)
     return 0;
 }
 
-/*
- * 轮询输入事件
- */
 int poll_input_event(display_ctx *ctx, struct InputEvent *event, int timeout_ms)
 {
     if (ctx->fallback)
@@ -471,9 +391,6 @@ int poll_input_event(display_ctx *ctx, struct InputEvent *event, int timeout_ms)
     return 1;
 }
 
-/*
- * 接收扩展数据
- */
 int poll_input_event_extend_data(display_ctx *ctx, void* payload,
                                  size_t size, int timeout_ms)
 {
@@ -496,9 +413,6 @@ int poll_input_event_extend_data(display_ctx *ctx, void* payload,
     return 1;
 }
 
-/*
- * 接收扩展文件描述符
- */
 int poll_input_event_extend_fds(display_ctx *ctx, int *fds, int max_fds,
                                 int *fd_count, int timeout_ms)
 {
@@ -535,9 +449,6 @@ int poll_input_event_extend_fds(display_ctx *ctx, int *fds, int max_fds,
     return 1;
 }
 
-/*
- * 请求资源
- */
 int push_resources_request(display_ctx *ctx, uint32_t service_type,
                            const uint32_t *args)
 {
@@ -553,9 +464,6 @@ int push_resources_request(display_ctx *ctx, uint32_t service_type,
     return push_output_event(ctx, &ev);
 }
 
-/*
- * 发送输出事件
- */
 int push_output_event(display_ctx *ctx, const struct OutputEvent *event)
 {
     if (ctx->fallback)
@@ -578,9 +486,6 @@ int push_output_event(display_ctx *ctx, const struct OutputEvent *event)
     return 0;
 }
 
-/*
- * 发送带扩展数据的输出事件
- */
 int push_output_event_with_length(display_ctx *ctx, const struct OutputEvent *event,
                                   void* payload, size_t size)
 {
@@ -613,9 +518,6 @@ int push_output_event_with_length(display_ctx *ctx, const struct OutputEvent *ev
     return 0;
 }
 
-/*
- * 设置 fallback 回调
- */
 int set_fallback_callback(display_ctx *ctx, void (*on_fallback)(void *),
                           void *userdata)
 {
@@ -624,25 +526,17 @@ int set_fallback_callback(display_ctx *ctx, void (*on_fallback)(void *),
     return 0;
 }
 
-/*
- * 检查是否处于 fallback 状态
- */
 bool is_fallback(display_ctx *ctx)
 {
     return ctx->fallback;
 }
 
-/*
- * 尝试退出 fallback
- */
 int try_exit_fallback(display_ctx *ctx)
 {
     if (!ctx->fallback) {
         fprintf(stderr, "ANLAND: try_exit_fallback() already connected\n");
         return 0;
     }
-
-    fprintf(stderr, "ANLAND: try_exit_fallback() start\n");
 
     if (pickup_fds(ctx) < 0) {
         fprintf(stderr, "ANLAND: try_exit_fallback() pickup_fds failed\n");
@@ -663,45 +557,29 @@ int try_exit_fallback(display_ctx *ctx)
     }
 
     ctx->fallback = false;
-    fprintf(stderr, "ANLAND: try_exit_fallback() success\n");
     return 0;
 }
 
-/*
- * 获取数据通道 fd
- */
 int get_data_fd(display_ctx *ctx)
 {
     return ctx->data_fd;
 }
 
-/*
- * 获取音频通道 fd
- */
 int get_audio_fd(display_ctx *ctx)
 {
     return ctx->fallback ? -1 : ctx->audio_fd;
 }
 
-/*
- * 获取 buffer-ready fd
- */
 int get_buffer_ready_fd(display_ctx *ctx)
 {
     return ctx->buf_ready_efd;
 }
 
-/*
- * 获取缓冲区数量
- */
 int get_buf_count(display_ctx *ctx)
 {
     return ctx->buf_count;
 }
 
-/*
- * 获取当前选中的缓冲区索引
- */
 int get_selected_idx(display_ctx *ctx)
 {
     if (!ctx->shm_ptr)
@@ -710,9 +588,6 @@ int get_selected_idx(display_ctx *ctx)
     return (idx < (uint32_t)ctx->buf_count) ? (int)idx : 0;
 }
 
-/*
- * 获取指定索引的 dmabuf fd
- */
 int get_dmabuf_fd_at(display_ctx *ctx, int idx)
 {
     if (idx < 0 || idx >= ctx->buf_count)
@@ -720,9 +595,6 @@ int get_dmabuf_fd_at(display_ctx *ctx, int idx)
     return ctx->dmabuf_fds[idx];
 }
 
-/*
- * 获取指定索引的 dmabuf 信息
- */
 int get_dmabuf_info_at(display_ctx *ctx, int idx, struct buf_info *info)
 {
     if (idx < 0 || idx >= ctx->buf_count)

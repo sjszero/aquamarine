@@ -9,12 +9,6 @@
 extern "C" {
 #endif
 
-/* 使用 pragma 禁用 flexible array member 警告 */
-#ifdef __GNUC__
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
-#endif
-
 #define CTRL_MSG_CONSUMER_HELLO  1
 #define CTRL_MSG_PRODUCER_HELLO  2
 #define CTRL_MSG_SCREEN_INFO     7
@@ -60,7 +54,6 @@ struct buf_info {
     uint32_t offset;
 } __attribute__((packed));
 
-/* 输入事件类型 */
 #define INPUT_TYPE_TOUCH          1
 #define INPUT_TYPE_KEY            2
 #define INPUT_TYPE_POINTER_MOTION 3
@@ -116,7 +109,7 @@ struct InputEvent {
         } text_input;
         struct {
             uint32_t action;
-            int32_t value;
+            int32_t  value;
         } input_action;
         struct {
             uint32_t type;
@@ -147,7 +140,6 @@ struct OutputEvent {
 #define OUTPUT_TYPE_CLIPBOARD 1
 #define OUTPUT_TYPE_RESOURCES_REQUEST 2
 
-/* 音频协议 */
 #define AUDIO_MSG_FORMAT 1
 #define AUDIO_MSG_PCM    2
 #define AUDIO_MSG_SHM    3
@@ -169,10 +161,6 @@ struct audio_msg {
     uint32_t type;
     uint32_t size;
 } __attribute__((packed));
-
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif
 
 #ifdef __cplusplus
 }

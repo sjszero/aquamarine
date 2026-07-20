@@ -33,4 +33,4 @@ private:
 
 } // namespace Aquamarine
 
-#endif // AQUAMARINE_ANLAND_TOUCH_HPP
+#endif

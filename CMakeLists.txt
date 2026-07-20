@@ -1,4 +1,3 @@
-# CMakeLists.txt
 cmake_minimum_required(VERSION 3.19)
 
 file(READ "${CMAKE_SOURCE_DIR}/VERSION" VER_RAW)
@@ -122,6 +121,8 @@ file(GLOB_RECURSE SRCFILES CONFIGURE_DEPENDS
     "src/*.cpp" 
     "include/*.hpp"
 )
+
+# 过滤掉 Anland 源文件（由子目录单独处理）
 list(FILTER SRCFILES EXCLUDE REGEX "src/backend/anland/.*")
 
 file(GLOB_RECURSE PUBLIC_HEADERS CONFIGURE_DEPENDS "include/*.hpp")
@@ -222,8 +223,6 @@ if(EXISTS ${ANLAND_DIR}/CMakeLists.txt)
     add_subdirectory(${ANLAND_DIR})
     target_compile_definitions(aquamarine PRIVATE HAS_ANLAND_BACKEND)
     message(STATUS "Anland backend enabled")
-else()
-    message(STATUS "Anland backend not found, skipping")
 endif()
 
 # ============================================================

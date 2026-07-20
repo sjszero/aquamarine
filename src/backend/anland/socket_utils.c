@@ -8,14 +8,10 @@
 #include <sys/un.h>
 #include <unistd.h>
 
-/*
- * 发送文件描述符
- */
 int send_fds(int sock, const void *data, size_t data_len,
              const int *fds, int fd_count)
 {
     if (fd_count <= 0) {
-        /* 无 fd，直接发送数据 */
         return send_all(sock, data, data_len);
     }
 
@@ -24,7 +20,6 @@ int send_fds(int sock, const void *data, size_t data_len,
         .iov_len  = data_len,
     };
 
-    /* 为 SCM_RIGHTS 分配控制缓冲区 */
     char cmsg_buf[CMSG_SPACE(sizeof(int) * fd_count)];
     memset(cmsg_buf, 0, sizeof(cmsg_buf));
 
@@ -45,9 +40,6 @@ int send_fds(int sock, const void *data, size_t data_len,
     return (n == (ssize_t)data_len) ? 0 : -1;
 }
 
-/*
- * 接收文件描述符
- */
 int recv_fds(int sock, void *data, size_t data_len,
              int *fds, int fd_count, int *fds_received)
 {
@@ -85,9 +77,6 @@ int recv_fds(int sock, void *data, size_t data_len,
     return (int)n;
 }
 
-/*
- * 连接到 Unix Domain Socket
- */
 int connect_unix(const char *path)
 {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -108,9 +97,6 @@ int connect_unix(const char *path)
     return fd;
 }
 
-/*
- * 发送全部数据
- */
 int send_all(int fd, const void *buf, size_t len)
 {
     const uint8_t *p = buf;
@@ -129,9 +115,6 @@ int send_all(int fd, const void *buf, size_t len)
     return 0;
 }
 
-/*
- * 接收全部数据
- */
 int recv_all(int fd, void *buf, size_t len)
 {
     uint8_t *p = buf;
