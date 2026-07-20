@@ -15,6 +15,7 @@
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
 namespace Aquamarine {
 
@@ -22,7 +23,6 @@ using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::Math::CRegion;
 
-// EGL 函数指针 - 与 KWin 一样，由 Hyprland 的 OpenGL 上下文提供
 static PFNEGLCREATEIMAGEKHRPROC g_eglCreateImageKHR = nullptr;
 static PFNEGLDESTROYIMAGEKHRPROC g_eglDestroyImageKHR = nullptr;
 static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC g_glEGLImageTargetTexture2DOES = nullptr;
@@ -32,12 +32,10 @@ static bool initEGLFunctions() {
     if (g_eglFunctionsInitialized) {
         return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr;
     }
-    // 从当前 EGL 上下文获取函数指针
     g_eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
     g_eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
     g_glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
     g_eglFunctionsInitialized = true;
-    ANLAND_LOG("EGL functions initialized");
     return g_eglCreateImageKHR != nullptr && g_eglDestroyImageKHR != nullptr && g_glEGLImageTargetTexture2DOES != nullptr;
 }
 
@@ -87,7 +85,6 @@ bool CAnlandOutput::ensureEGLInitialized() {
             return false;
         }
         m_eglInitialized = true;
-        ANLAND_TRACE("ensureEGLInitialized: using current display");
         return true;
     }
 
@@ -99,6 +96,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     ANLAND_TRACE("initialize START: %dx%d @ %d mHz", width, height, refresh);
     if (m_destroying) return false;
 
+    // 输出大小 - 由 Hyprland 配置决定，与 dmabuf 大小无关
     m_width = width;
     m_height = height;
     m_refresh = refresh > 0 ? refresh : 60000;
@@ -156,7 +154,6 @@ void CAnlandOutput::releaseBuffers() {
     ANLAND_TRACE("releaseBuffers END");
 }
 
-// 与 KWin 一样：使用输出的大小，而不是 dmabuf 的大小
 void CAnlandOutput::reconfigureSwapchain() {
     ANLAND_TRACE("reconfigureSwapchain START");
     if (!m_buffersImported || m_bufferCount <= 0) {
@@ -169,14 +166,13 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
-    // 获取实际格式
     uint32_t actualFormat = DRM_FORMAT_XRGB8888;
     auto firstBuf = getBuffer(0);
     if (firstBuf) {
         auto attrs = firstBuf->dmabuf();
         if (attrs.success) {
             actualFormat = attrs.format;
-            ANLAND_LOG("reconfigureSwapchain: using actual format 0x%x", actualFormat);
+            ANLAND_DEBUG("reconfigureSwapchain: using actual format 0x%x", actualFormat);
         }
     }
 
@@ -193,7 +189,7 @@ void CAnlandOutput::reconfigureSwapchain() {
         }
     }
 
-    // 关键：使用输出的大小 (m_width/m_height)，而不是 dmabuf 的大小
+    // 关键：使用输出大小，而不是 dmabuf 大小
     SSwapchainOptions opts;
     opts.length = m_bufferCount;
     opts.size = Hyprutils::Math::Vector2D((float)m_width, (float)m_height);
@@ -234,10 +230,9 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    ANLAND_TRACE("importBuffer: fd=%d, size=%dx%d, format=0x%x, stride=%d", 
+    ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, format=0x%x, stride=%d", 
                  fd, info.width, info.height, info.format, info.stride);
 
-    // 创建 CAnlandDmaBuffer 包装 dmabuf
     slot->buffer = CSharedPointer<CAnlandDmaBuffer>(new CAnlandDmaBuffer(fd, info));
     close(fd);
     if (!slot->buffer->good()) {
@@ -246,7 +241,6 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // 监听 release 事件
     [[maybe_unused]] auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
         ANLAND_TRACE("Buffer %d released", index);
         if (index < m_bufferCount && m_slots[index].buffer) {
@@ -331,7 +325,6 @@ void CAnlandOutput::importBuffers() {
 }
 
 bool CAnlandOutput::test() {
-    ANLAND_TRACE("test: returning true");
     return true;
 }
 
@@ -413,10 +406,12 @@ bool CAnlandOutput::commit() {
 
     if (slot.buffer) {
         state->setBuffer(slot.buffer);
+        ANLAND_DEBUG("commit: using buffer %d (fd=%d)", m_selectedIndex, slot.buffer->dmabuf().fds[0]);
     } else {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
     }
 
+    // 使用输出大小，不是 dmabuf 大小
     state->addDamage(CRegion(0, 0, (int)m_width, (int)m_height));
 
     if (m_shouldTriggerRefresh) {

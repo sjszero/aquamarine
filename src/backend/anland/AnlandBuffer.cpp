@@ -12,9 +12,10 @@ namespace Aquamarine {
 
 CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info)
     : m_fd(dup(fd)), m_info(info) {
+    // size 直接使用 dmabuf 的实际大小
+    size = { (float)info.width, (float)info.height };
     ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d, size=%dx%d, format=0x%x, modifier=0x%lx, stride=%d, offset=%d",
                  m_fd, info.width, info.height, info.format, info.modifier, info.stride, info.offset);
-    size = { (float)info.width, (float)info.height };
     opaque = true;
 }
 
@@ -37,9 +38,9 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
     }
 
     attrs.success = true;
+    // 关键：size 使用 dmabuf 的实际大小
     attrs.size = size;
     attrs.format = m_info.format;
-    // 使用 INVALID modifier - 与 KWin 一样，让 EGL 驱动自动选择
     attrs.modifier = DRM_FORMAT_MOD_INVALID;
     attrs.planes = 1;
     attrs.fds[0] = m_fd;
@@ -51,8 +52,8 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
         attrs.strides[i] = 0;
     }
     
-    ANLAND_DEBUG("dmabuf: fd=%d, format=0x%x, modifier=0x%lx (INVALID), stride=%d, offset=%d",
-                 m_fd, attrs.format, attrs.modifier, attrs.strides[0], attrs.offsets[0]);
+    ANLAND_DEBUG("dmabuf: fd=%d, size=%.0fx%.0f, format=0x%x, modifier=0x%lx (INVALID), stride=%d, offset=%d",
+                 m_fd, size.x, size.y, attrs.format, attrs.modifier, attrs.strides[0], attrs.offsets[0]);
     return attrs;
 }
 
