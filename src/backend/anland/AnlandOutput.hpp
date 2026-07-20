@@ -1,4 +1,3 @@
-// src/backend/anland/AnlandOutput.hpp
 #ifndef AQUAMARINE_ANLAND_OUTPUT_HPP
 #define AQUAMARINE_ANLAND_OUTPUT_HPP
 
@@ -45,7 +44,7 @@ public:
     virtual size_t getDeGammaSize() override { return 0; }
     virtual bool destroy() override { return false; }
 
-    // Cursor (不支持)
+    // Cursor
     virtual bool setCursor(CSharedPointer<IBuffer> buffer, const Hyprutils::Math::Vector2D& hotspot) override { return false; }
     virtual void moveCursor(const Hyprutils::Math::Vector2D& coord, bool skipSchedule = false) override {}
     virtual void setCursorVisible(bool visible) override {}
@@ -63,8 +62,6 @@ public:
     // 用于 CAnlandAllocator
     int getBufferCount() const { return m_bufferCount; }
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
-
-    // 用于 CAnlandAllocator::getBackend()
     CSharedPointer<CBackend> getCBackend() const;
 
     display_ctx* display();
@@ -109,7 +106,7 @@ private:
     std::atomic<bool> m_framePending{false};
     std::atomic<bool> m_commitInProgress{false};
 
-    // 注意：使用基类的 swapchain 成员，不在此处重复定义
+    // 注意：使用基类的 swapchain 成员，不在此处定义自己的 swapchain
 
     bool m_frameScheduled = false;
     CSharedPointer<std::function<void(void)>> m_frameIdle;
