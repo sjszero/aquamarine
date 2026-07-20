@@ -341,19 +341,39 @@ jobs:
             src-hypr-
 
       - name: Fetch Hyprland source
-        if: inputs.skip_hyprland != true && (inputs.clean_cache == true || steps.hypr-src-cache.outputs.cache-hit != 'true')
+        if: inputs.skip_hyprland != true
         run: |
-          apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
+          # 总是尝试获取源码，确保源码目录存在
+          if [ ! -d "${{ env.HYPR_SRC }}-*" ] || [ "${{ inputs.clean_cache }}" == "true" ]; then
+            apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
+          fi
 
       - name: Apply Anland patch to Hyprland
         if: inputs.skip_hyprland != true
         run: |
-          cd ./${{ env.HYPR_SRC }}-*/
+          cd ./${{ env.HYPR_SRC }}-*/ || {
+            echo "Failed to find Hyprland source directory, trying to fetch source..."
+            apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
+            cd ./${{ env.HYPR_SRC }}-*/
+          }
           PATCH_FILE="../${{ env.HYPR_PATCH }}"
           if [ -f "$PATCH_FILE" ]; then
             echo "Applying ${{ env.HYPR_PATCH }} with git apply..."
-            git apply --verbose --ignore-space-change --ignore-whitespace "$PATCH_FILE" || \
-              patch -p1 < "$PATCH_FILE" || true
+            # 先尝试 git apply，忽略空白差异
+            if ! git apply --verbose --ignore-space-change --ignore-whitespace "$PATCH_FILE" 2>/dev/null; then
+              echo "git apply failed, trying patch..."
+              if ! patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
+                echo "Patch not applied, applying..."
+                patch -p1 < "$PATCH_FILE" || {
+                  echo "Failed to apply patch with patch command, trying with --fuzz=5..."
+                  patch -p1 --fuzz=5 < "$PATCH_FILE" || true
+                }
+              else
+                echo "Patch already applied, skipping."
+              fi
+            else
+              echo "git apply succeeded."
+            fi
           else
             echo "⚠️ No patch file found at $PATCH_FILE, skipping"
           fi
