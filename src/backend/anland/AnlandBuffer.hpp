@@ -33,6 +33,8 @@ private:
     int m_fd = -1;
     buf_info m_info;
     uint64_t m_modifier = DRM_FORMAT_MOD_INVALID;
+    // 保存一份 fd 的副本，在析构时关闭
+    int m_ownedFd = -1;
 };
 
 } // namespace Aquamarine
