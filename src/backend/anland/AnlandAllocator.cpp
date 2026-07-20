@@ -41,7 +41,8 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
             buf->inUse = true;
             m_lastAcquired = idx;
             ANLAND_TRACE("acquire: using buffer %d (fd=%d)", idx, buf->dmabuf().fds[0]);
-            return CSharedPointer<IBuffer>(static_cast<IBuffer*>(buf.get()));
+            // 修复：使用隐式转换，与 m_output 中的 shared_ptr 共享所有权
+            return buf;
         }
         idx = (idx + 1) % count;
     }
@@ -52,7 +53,8 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
         ANLAND_TRACE("acquire: reusing buffer %d (all busy, fd=%d)", start, buf->dmabuf().fds[0]);
         buf->inUse = true;
         m_lastAcquired = start;
-        return CSharedPointer<IBuffer>(static_cast<IBuffer*>(buf.get()));
+        // 修复：使用隐式转换，与 m_output 中的 shared_ptr 共享所有权
+        return buf;
     }
 
     ANLAND_ERR("acquire: no usable buffers");
