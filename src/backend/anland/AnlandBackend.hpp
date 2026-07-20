@@ -49,6 +49,7 @@ public:
     virtual CSharedPointer<IAllocator> preferredAllocator() override { return nullptr; }
     virtual std::vector<CSharedPointer<IAllocator>> getAllocators() override { return {}; }
     virtual CWeakPointer<IBackendImplementation> getPrimary() override { return self; }
+    virtual std::vector<SDRMFormat> getRenderableFormats() override { return getRenderFormats(); }
 
     // Public accessors
     CSharedPointer<CBackend> getBackend() const { return m_backend; }

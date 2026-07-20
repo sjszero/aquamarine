@@ -606,6 +606,9 @@ int Aquamarine::CBackend::reopenDRMNode(int drmFD, bool allowRenderNode) {
 
 /* ============================================================
  * IBackendImplementation::getRenderableFormats() - 默认实现
+ *
+ * 所有后端实现类需要实现此方法。默认返回空 vector，
+ * 表示使用 getRenderFormats() 的结果。
  * ============================================================ */
 
 std::vector<SDRMFormat> Aquamarine::IBackendImplementation::getRenderableFormats() {

@@ -1,3 +1,4 @@
+// include/aquamarine/backend/Headless.hpp
 #pragma once
 
 #include "./Backend.hpp"
@@ -53,9 +54,10 @@ namespace Aquamarine {
         virtual Hyprutils::Memory::CSharedPointer<IAllocator>              preferredAllocator();
         virtual std::vector<Hyprutils::Memory::CSharedPointer<IAllocator>> getAllocators();
         virtual Hyprutils::Memory::CWeakPointer<IBackendImplementation>    getPrimary();
+        virtual int                                                        drmRenderNodeFD();
+        virtual std::vector<SDRMFormat>                                    getRenderableFormats() override;
 
         Hyprutils::Memory::CWeakPointer<CHeadlessBackend>                  self;
-        virtual int                                                        drmRenderNodeFD();
 
       private:
         CHeadlessBackend(Hyprutils::Memory::CSharedPointer<CBackend> backend_);
