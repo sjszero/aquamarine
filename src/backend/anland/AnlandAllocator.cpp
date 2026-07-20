@@ -25,28 +25,27 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
     int count = m_output->getBufferCount();
     if (count <= 0) return nullptr;
 
-    // 找下一个可用的缓冲区（未在使用中）
+    // 找下一个可用的缓冲区
     int start = (m_lastAcquired + 1) % count;
     int idx = start;
-    bool found = false;
     
     for (int i = 0; i < count; i++) {
         auto buf = m_output->getBuffer(idx);
         if (buf && !buf->inUse) {
             buf->inUse = true;
             m_lastAcquired = idx;
-            found = true;
-            // 确保缓冲区对象被正确引用
+            ANLAND_TRACE("acquire: using buffer %d", idx);
             return CSharedPointer<IBuffer>(static_cast<IBuffer*>(buf.get()));
         }
         idx = (idx + 1) % count;
     }
 
-    // 如果没有找到空闲缓冲区，返回第一个（老缓冲区会被覆盖）
+    // 如果所有缓冲区都在使用中，返回第一个（覆盖）
     auto buf = m_output->getBuffer(start);
     if (buf) {
         buf->inUse = true;
         m_lastAcquired = start;
+        ANLAND_TRACE("acquire: reusing buffer %d (all busy)", start);
         return CSharedPointer<IBuffer>(static_cast<IBuffer*>(buf.get()));
     }
 

@@ -78,20 +78,24 @@ display_ctx* CAnlandOutput::display() {
 bool CAnlandOutput::ensureEGLInitialized() {
     if (m_eglInitialized && m_eglDisplay != EGL_NO_DISPLAY) return true;
 
+    // 先尝试获取当前显示
     m_eglDisplay = eglGetCurrentDisplay();
-    if (m_eglDisplay == EGL_NO_DISPLAY) {
-        ANLAND_TRACE("ensureEGLInitialized: no current EGLDisplay (will retry later)");
-        return false;
+    if (m_eglDisplay != EGL_NO_DISPLAY) {
+        if (!initEGLFunctions()) {
+            ANLAND_ERR("ensureEGLInitialized: EGL functions not available");
+            return false;
+        }
+        m_eglInitialized = true;
+        ANLAND_TRACE("ensureEGLInitialized: using current display");
+        return true;
     }
 
-    if (!initEGLFunctions()) {
-        ANLAND_ERR("ensureEGLInitialized: EGL functions not available");
-        return false;
-    }
-
-    m_eglInitialized = true;
-    ANLAND_TRACE("ensureEGLInitialized: success");
-    return true;
+    // 如果没有当前显示，尝试使用 surfaceless 平台创建
+    ANLAND_LOG("ensureEGLInitialized: no current EGL display, attempting to create one");
+    
+    // 注意：这里需要 EGL 的 platfrom 扩展，但 Hyprland 应该已经初始化了
+    // 如果到这里，说明 Hyprland 的 EGL 初始化还没完成，我们等待
+    return false;  // 让调用者稍后重试
 }
 
 bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh) {
@@ -167,7 +171,17 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
-    // 使用基类的 swapchain
+    // 获取第一个缓冲区的实际格式
+    uint32_t actualFormat = DRM_FORMAT_XRGB8888;
+    auto firstBuf = getBuffer(0);
+    if (firstBuf) {
+        auto attrs = firstBuf->dmabuf();
+        if (attrs.success) {
+            actualFormat = attrs.format;
+            ANLAND_LOG("reconfigureSwapchain: using actual format 0x%x", actualFormat);
+        }
+    }
+
     if (!this->swapchain) {
         auto alloc = CAnlandAllocator::create(this);
         if (!alloc) {
@@ -184,14 +198,14 @@ void CAnlandOutput::reconfigureSwapchain() {
     SSwapchainOptions opts;
     opts.length = m_bufferCount;
     opts.size = Hyprutils::Math::Vector2D((float)m_width, (float)m_height);
-    opts.format = DRM_FORMAT_XRGB8888;
+    opts.format = actualFormat;  // 使用实际格式
     opts.scanout = true;
 
     if (!this->swapchain->reconfigure(opts)) {
         ANLAND_ERR("reconfigureSwapchain: failed to reconfigure");
         return;
     }
-    ANLAND_LOG("reconfigureSwapchain: success, %d buffers", m_bufferCount);
+    ANLAND_LOG("reconfigureSwapchain: success, %d buffers, format 0x%x", m_bufferCount, actualFormat);
 }
 
 bool CAnlandOutput::importBuffer(int index) {
