@@ -1,3 +1,4 @@
+// src/backend/Null.cpp
 #include <aquamarine/backend/Null.hpp>
 #include <fcntl.h>
 #include <ctime>
@@ -86,4 +87,11 @@ std::vector<SP<IAllocator>> Aquamarine::CNullBackend::getAllocators() {
 
 Hyprutils::Memory::CWeakPointer<IBackendImplementation> Aquamarine::CNullBackend::getPrimary() {
     return {};
+}
+
+/* ============================================================
+ * CNullBackend::getRenderableFormats() - 可渲染格式
+ * ============================================================ */
+std::vector<SDRMFormat> Aquamarine::CNullBackend::getRenderableFormats() {
+    return getRenderFormats();
 }

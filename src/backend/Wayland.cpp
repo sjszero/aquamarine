@@ -820,3 +820,10 @@ Aquamarine::CWaylandBuffer::~CWaylandBuffer() {
 bool Aquamarine::CWaylandBuffer::good() {
     return waylandState.buffer && waylandState.buffer->resource();
 }
+
+/* ============================================================
+ * CWaylandBackend::getRenderableFormats() - 可渲染格式
+ * ============================================================ */
+std::vector<SDRMFormat> Aquamarine::CWaylandBackend::getRenderableFormats() {
+    return getRenderFormats();
+}

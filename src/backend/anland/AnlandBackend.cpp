@@ -440,6 +440,52 @@ void CAnlandBackend::updateCameraResources() {
     ANLAND_LOG("Camera resources requested");
 }
 
+/* ============================================================
+ * updateClipboard() - 处理剪贴板事件
+ * ============================================================ */
+void CAnlandBackend::updateClipboard(const InputEvent& ev) {
+    if (m_inFallback || !m_display) return;
+
+    const uint32_t size = ev.clipboard.size;
+    if (size == 0) return;
+
+    // 读取剪贴板数据
+    std::vector<uint8_t> data(size);
+    if (poll_input_event_extend_data(m_display, data.data(), size, 5000) != 1) {
+        ANLAND_ERR("updateClipboard: failed to read clipboard data");
+        return;
+    }
+
+    // TODO: 将数据发送到 Hyprland 的剪贴板管理器
+    // 这需要通过 Hyprland 的 SeatManager 和 DataDevice 接口
+    // 这里暂时只做日志
+    ANLAND_LOG("updateClipboard: received %u bytes of clipboard data", size);
+}
+
+/* ============================================================
+ * updateTextInput() - 处理文本输入事件
+ * ============================================================ */
+void CAnlandBackend::updateTextInput(const InputEvent& ev) {
+    if (m_inFallback || !m_display) return;
+
+    const uint32_t size = ev.text_input.size;
+    if (size == 0) return;
+
+    // 读取文本输入数据
+    std::vector<uint8_t> data(size);
+    if (poll_input_event_extend_data(m_display, data.data(), size, 5000) != 1) {
+        ANLAND_ERR("updateTextInput: failed to read text input data");
+        return;
+    }
+
+    std::string text(reinterpret_cast<char*>(data.data()), size);
+    ANLAND_LOG("updateTextInput: received text: %s", text.c_str());
+
+    // TODO: 将文本注入到 Hyprland 的输入法系统
+    // 这需要通过 Hyprland 的 InputMethodRelay 接口
+    // 这里暂时只做日志
+}
+
 std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     std::vector<SDRMFormat> formats;
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});

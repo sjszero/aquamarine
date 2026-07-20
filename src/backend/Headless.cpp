@@ -1,3 +1,4 @@
+// src/backend/Headless.cpp
 #include <aquamarine/backend/Headless.hpp>
 #include <fcntl.h>
 #include <algorithm>
@@ -19,7 +20,6 @@ Aquamarine::CHeadlessOutput::CHeadlessOutput(const std::string& name_, Hyprutils
 
     framecb = makeShared<std::function<void()>>([this]() {
         frameScheduled = false;
-        // not sure about removing this since framecb might be called outside of scheduleFrames no?!
         lastFrame      = std::chrono::steady_clock::now();
         events.frame.emit();
     });
@@ -66,7 +66,6 @@ void Aquamarine::CHeadlessOutput::scheduleFrame(const scheduleFrameReason reason
 
     frameScheduled = true;
 
-    // schedule next frame when it should occur with a timer
     int64_t refreshRatemHz = 60000;
     auto&   currentState   = state->state();
 
@@ -152,14 +151,14 @@ std::vector<SDRMFormat> Aquamarine::CHeadlessBackend::getRenderFormats() {
     }
 
     // formats probably supported by EGL
-    return {SDRMFormat{.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_INVALID}},
-            SDRMFormat{.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_INVALID}},
-            SDRMFormat{.drmFormat = DRM_FORMAT_RGBX8888, .modifiers = {DRM_FORMAT_INVALID}},
-            SDRMFormat{.drmFormat = DRM_FORMAT_BGRX8888, .modifiers = {DRM_FORMAT_INVALID}},
-            SDRMFormat{.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_INVALID}},
-            SDRMFormat{.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_INVALID}},
-            SDRMFormat{.drmFormat = DRM_FORMAT_RGBA8888, .modifiers = {DRM_FORMAT_INVALID}},
-            SDRMFormat{.drmFormat = DRM_FORMAT_BGRA8888, .modifiers = {DRM_FORMAT_INVALID}},
+    return {SDRMFormat{.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}},
+            SDRMFormat{.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}},
+            SDRMFormat{.drmFormat = DRM_FORMAT_RGBX8888, .modifiers = {DRM_FORMAT_MOD_INVALID}},
+            SDRMFormat{.drmFormat = DRM_FORMAT_BGRX8888, .modifiers = {DRM_FORMAT_MOD_INVALID}},
+            SDRMFormat{.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}},
+            SDRMFormat{.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}},
+            SDRMFormat{.drmFormat = DRM_FORMAT_RGBA8888, .modifiers = {DRM_FORMAT_MOD_INVALID}},
+            SDRMFormat{.drmFormat = DRM_FORMAT_BGRA8888, .modifiers = {DRM_FORMAT_MOD_INVALID}},
             SDRMFormat{.drmFormat = DRM_FORMAT_XRGB2101010, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
             SDRMFormat{.drmFormat = DRM_FORMAT_XBGR2101010, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
             SDRMFormat{.drmFormat = DRM_FORMAT_RGBX1010102, .modifiers = {DRM_FORMAT_MOD_LINEAR}},
@@ -244,4 +243,11 @@ Hyprutils::Memory::CWeakPointer<IBackendImplementation> Aquamarine::CHeadlessBac
 
 bool Aquamarine::CHeadlessBackend::CTimer::expired() {
     return std::chrono::steady_clock::now() > when;
+}
+
+/* ============================================================
+ * CHeadlessBackend::getRenderableFormats() - 可渲染格式
+ * ============================================================ */
+std::vector<SDRMFormat> Aquamarine::CHeadlessBackend::getRenderableFormats() {
+    return getRenderFormats();
 }
