@@ -75,12 +75,17 @@ display_ctx* CAnlandOutput::display() {
     return m_backend->display();
 }
 
+/* ============================================================
+ * ensureEGLInitialized - 延迟初始化 EGL
+ * 只有在真正需要创建 EGLImage 时才初始化，此时 Hyprland 已创建 EGL 上下文
+ * ============================================================ */
 bool CAnlandOutput::ensureEGLInitialized() {
     if (m_eglInitialized && m_eglDisplay != EGL_NO_DISPLAY) return true;
 
     m_eglDisplay = eglGetCurrentDisplay();
     if (m_eglDisplay == EGL_NO_DISPLAY) {
-        ANLAND_ERR("ensureEGLInitialized: no current EGL display");
+        // 延迟初始化：EGL 上下文尚未创建，稍后重试
+        ANLAND_DEBUG("ensureEGLInitialized: no current EGL display, will retry later");
         return false;
     }
 
@@ -90,6 +95,7 @@ bool CAnlandOutput::ensureEGLInitialized() {
     }
 
     m_eglInitialized = true;
+    ANLAND_DEBUG("ensureEGLInitialized: EGL initialized successfully");
     return true;
 }
 
@@ -236,6 +242,9 @@ void CAnlandOutput::reconfigureSwapchain() {
                m_bufferCount, actualFormat, m_width, m_height);
 }
 
+/* ============================================================
+ * importBuffer - 导入单个 dmabuf（延迟 EGL 初始化）
+ * ============================================================ */
 bool CAnlandOutput::importBuffer(int index) {
     ANLAND_TRACE("importBuffer: index=%d", index);
     if (index < 0 || index >= MAX_BUFS || m_destroying) return false;
@@ -265,11 +274,7 @@ bool CAnlandOutput::importBuffer(int index) {
     ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, format=0x%x, modifier=0x%lx, stride=%d",
                  fd, info.width, info.height, info.format, info.modifier, info.stride);
 
-    if (!ensureEGLInitialized()) {
-        close(fd);
-        return false;
-    }
-
+    // 保存 dmabuf 信息，但不创建 EGLImage（延迟到实际渲染时）
     uint64_t modifier = info.modifier;
     if (modifier == 0) {
         modifier = DRM_FORMAT_MOD_INVALID;
@@ -447,6 +452,13 @@ bool CAnlandOutput::commit() {
             return true;
         }
         reconfigureSwapchain();
+    }
+
+    // 尝试初始化 EGL（如果尚未初始化且当前有上下文）
+    if (!m_eglInitialized) {
+        ensureEGLInitialized();
+        // 即使 EGL 未初始化，也继续执行，但可能无法创建 EGLImage
+        // 实际渲染时会再次尝试
     }
 
     m_selectedIndex = get_selected_idx(dpy);
