@@ -207,48 +207,39 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    if (slot->fd < 0) {
-        int fd = get_dmabuf_fd_at(dpy, index);
-        if (fd < 0) {
-            ANLAND_ERR("importBuffer: get_dmabuf_fd_at failed for %d", index);
-            return false;
-        }
+    // 如果 slot 已有 buffer，直接标记已导入
+    if (slot->buffer && slot->buffer->good()) {
+        slot->imported = true;
+        return true;
+    }
 
-        buf_info info;
-        if (get_dmabuf_info_at(dpy, index, &info) < 0) {
-            ANLAND_ERR("importBuffer: get_dmabuf_info_at failed for %d", index);
-            close(fd);
-            return false;
-        }
+    int fd = get_dmabuf_fd_at(dpy, index);
+    if (fd < 0) {
+        ANLAND_ERR("importBuffer: get_dmabuf_fd_at failed for %d", index);
+        return false;
+    }
 
-        slot->fd = dup(fd);
+    buf_info info;
+    if (get_dmabuf_info_at(dpy, index, &info) < 0) {
+        ANLAND_ERR("importBuffer: get_dmabuf_info_at failed for %d", index);
         close(fd);
-        if (slot->fd < 0) {
-            ANLAND_ERR("importBuffer: dup failed");
-            return false;
-        }
-
-        slot->width = info.width;
-        slot->height = info.height;
-        slot->format = info.format;
-        slot->modifier = info.modifier;
-        slot->offset = info.offset;
-        slot->stride = info.stride;
-        ANLAND_TRACE("importBuffer: buffer %d: %dx%d fd=%d", index, info.width, info.height, slot->fd);
+        return false;
     }
 
-    if (!slot->buffer) {
-        buf_info info;
-        info.width = slot->width;
-        info.height = slot->height;
-        info.format = slot->format;
-        info.modifier = slot->modifier;
-        info.offset = slot->offset;
-        info.stride = slot->stride;
-        slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
-            new CAnlandDmaBuffer(slot->fd, info));
+    // CAnlandDmaBuffer 会自己 dup fd，我们关闭原始 fd
+    slot->buffer = CSharedPointer<CAnlandDmaBuffer>(new CAnlandDmaBuffer(fd, info));
+    close(fd);
+    if (!slot->buffer->good()) {
+        slot->buffer = nullptr;
+        return false;
     }
 
+    slot->width = info.width;
+    slot->height = info.height;
+    slot->format = info.format;
+    slot->modifier = info.modifier;
+    slot->offset = info.offset;
+    slot->stride = info.stride;
     slot->imported = true;
     slot->hasDamage = true;
 
