@@ -32,8 +32,8 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
     attrs.success = true;
     attrs.size = size;
     attrs.format = m_info.format;
-    // 使用 INVALID modifier 提高兼容性
-    attrs.modifier = DRM_FORMAT_MOD_INVALID;
+    // 关键修复：使用 Android 端报告的实际修饰符，而不是强制覆盖为 INVALID
+    attrs.modifier = m_info.modifier;
     attrs.planes = 1;
     attrs.fds[0] = m_fd;
     attrs.offsets[0] = m_info.offset;
