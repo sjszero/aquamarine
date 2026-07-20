@@ -18,7 +18,6 @@ CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info)
 
 CAnlandDmaBuffer::~CAnlandDmaBuffer() {
     ANLAND_TRACE("CAnlandDmaBuffer destructor: fd=%d", m_fd);
-    // 析构时释放缓冲区，重置 inUse 标志
     inUse = false;
     if (m_fd >= 0) close(m_fd);
     events.destroy.emit();
@@ -32,8 +31,10 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
     attrs.success = true;
     attrs.size = size;
     attrs.format = m_info.format;
-    // 关键修复：使用 Android 端报告的实际修饰符，而不是强制覆盖为 INVALID
-    attrs.modifier = m_info.modifier;
+    
+    // 关键修复：使用 DRM_FORMAT_MOD_INVALID 让 EGL 自动选择
+    // 这样可以避免驱动不支持的 modifier 组合导致 EGL_CreateImage 失败
+    attrs.modifier = DRM_FORMAT_MOD_INVALID;
     attrs.planes = 1;
     attrs.fds[0] = m_fd;
     attrs.offsets[0] = m_info.offset;
@@ -44,7 +45,7 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
         attrs.strides[i] = 0;
     }
     
-    ANLAND_TRACE("dmabuf: fd=%d, format=0x%x, modifier=0x%lx, stride=%d, offset=%d",
+    ANLAND_TRACE("dmabuf: fd=%d, format=0x%x, modifier=0x%lx (INVALID), stride=%d, offset=%d",
                  m_fd, attrs.format, attrs.modifier, attrs.strides[0], attrs.offsets[0]);
     return attrs;
 }
