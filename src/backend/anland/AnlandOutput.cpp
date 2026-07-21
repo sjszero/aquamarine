@@ -103,9 +103,17 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setMode(mode);
     this->state->setFormat(m_drmFormat);
 
-    // 设置默认图像描述，防止渲染器访问空指针
-    // 使用 sRGB 描述作为默认
-    this->state->setGammaLut({});
+    // 初始化 Gamma 表，防止 getConvertedColor 失败
+    // 设置一个空的 gamma 表，让 Hyprland 知道我们有颜色管理支持
+    std::vector<uint16_t> defaultGamma;
+    defaultGamma.resize(256 * 3);
+    for (int i = 0; i < 256; i++) {
+        uint16_t val = (i * 65535) / 255;
+        defaultGamma[i * 3 + 0] = val;
+        defaultGamma[i * 3 + 1] = val;
+        defaultGamma[i * 3 + 2] = val;
+    }
+    this->state->setGammaLut(defaultGamma);
 
     m_outputReady = true;
     m_inFallback = true;
@@ -437,7 +445,8 @@ bool CAnlandOutput::commit() {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
     }
 
-    state->addDamage(slot.damage);
+    // 添加全屏损伤（简化处理）
+    state->addDamage(CRegion(0, 0, m_width, m_height));
     slot.damage = CRegion();
 
     if (m_shouldTriggerRefresh) {
