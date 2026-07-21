@@ -12,14 +12,10 @@
 #include <cerrno>
 #include <chrono>
 
-#include "helpers/cm/ColorManagement.hpp"
-
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
-
-using namespace NColorManagement;
 
 namespace Aquamarine {
 
@@ -29,7 +25,7 @@ using Hyprutils::Math::CRegion;
 
 static uint32_t protocol_format_to_drm(uint32_t fmt) {
     switch (fmt) {
-    case 1:  // Android RGBA_8888
+    case 1:  // Android RGBA_8888 -> DRM_ABGR8888
         return DRM_FORMAT_ABGR8888;
     default:
         return DRM_FORMAT_XRGB8888;
@@ -47,9 +43,6 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     this->subpixel = AQ_SUBPIXEL_UNKNOWN;
     this->enabled = false;
     this->state = makeShared<COutputState>();
-
-    // 设置默认的 sRGB 图像描述
-    m_imageDescription = getDefaultImageDescription();
 
     for (int i = 0; i < MAX_BUFS; i++) {
         m_slots[i].imported = false;
@@ -81,11 +74,6 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     m_height = height;
     m_refresh = refresh > 0 ? refresh : 60000;
     m_drmFormat = DRM_FORMAT_XRGB8888;
-
-    // 确保 ImageDescription 已设置
-    if (!m_imageDescription) {
-        m_imageDescription = getDefaultImageDescription();
-    }
 
     this->physicalSize = Hyprutils::Math::Vector2D(
         static_cast<float>(width) / 96.0f,
@@ -359,10 +347,6 @@ void CAnlandOutput::importBuffers() {
         if (w > 0 && h > 0 && fmt != 0) {
             if (w != m_width || h != m_height || fmt != m_drmFormat) {
                 ANLAND_LOG("importBuffers: buffer size changed to %dx%d fmt 0x%x, updating output", w, h, fmt);
-                // 更新 ImageDescription 以匹配新的格式
-                if (fmt == DRM_FORMAT_ABGR8888 || fmt == DRM_FORMAT_ARGB8888) {
-                    m_imageDescription = getDefaultImageDescription();
-                }
                 updateMode(w, h, fmt);
             }
         }
@@ -505,26 +489,30 @@ bool CAnlandOutput::commit() {
 
     // 创建 render fence 实现 GPU 同步
     if (m_eglDisplay != EGL_NO_DISPLAY) {
-        EGLSyncKHR sync = eglCreateSyncKHR(m_eglDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr);
-        if (sync != EGL_NO_SYNC_KHR) {
-            int fenceFd = -1;
-            // 使用 eglDupNativeFenceFDANDROID 获取 fence fd
-            PFNEGLDUPNATIVEFENCEFDANDROIDPROC eglDupNativeFenceFDANDROID = 
-                (PFNEGLDUPNATIVEFENCEFDANDROIDPROC)eglGetProcAddress("eglDupNativeFenceFDANDROID");
-            if (eglDupNativeFenceFDANDROID) {
-                fenceFd = eglDupNativeFenceFDANDROID(m_eglDisplay, sync);
-            }
-            if (fenceFd >= 0) {
-                set_render_fence(dpy, fenceFd);
-                ANLAND_DEBUG("commit: created render fence fd=%d", fenceFd);
-            } else {
-                ANLAND_DEBUG("commit: failed to create render fence");
-            }
-            PFNEGLDESTROYSYNCKHRPROC eglDestroySyncKHR = 
-                (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
-            if (eglDestroySyncKHR) {
+        // 使用 eglGetProcAddress 获取函数指针
+        PFNEGLCREATESYNCKHRPROC eglCreateSyncKHR = 
+            (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
+        PFNEGLDUPNATIVEFENCEFDANDROIDPROC eglDupNativeFenceFDANDROID = 
+            (PFNEGLDUPNATIVEFENCEFDANDROIDPROC)eglGetProcAddress("eglDupNativeFenceFDANDROID");
+        PFNEGLDESTROYSYNCKHRPROC eglDestroySyncKHR = 
+            (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
+
+        if (eglCreateSyncKHR && eglDupNativeFenceFDANDROID && eglDestroySyncKHR) {
+            EGLSyncKHR sync = eglCreateSyncKHR(m_eglDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr);
+            if (sync != EGL_NO_SYNC_KHR) {
+                int fenceFd = eglDupNativeFenceFDANDROID(m_eglDisplay, sync);
+                if (fenceFd >= 0) {
+                    set_render_fence(dpy, fenceFd);
+                    ANLAND_DEBUG("commit: created render fence fd=%d", fenceFd);
+                } else {
+                    ANLAND_DEBUG("commit: failed to create render fence (dup failed)");
+                }
                 eglDestroySyncKHR(m_eglDisplay, sync);
+            } else {
+                ANLAND_DEBUG("commit: failed to create render fence (sync creation failed)");
             }
+        } else {
+            ANLAND_DEBUG("commit: EGL sync functions not available");
         }
     }
 

@@ -17,10 +17,14 @@
 #include <GLES3/gl32.h>
 #include <GLES2/gl2ext.h>
 
-#include "helpers/cm/ColorManagement.hpp"
-
 extern "C" {
 #include "display_producer.h"
+}
+
+// 前向声明 ImageDescription 类型（避免包含 Hyprland 头文件）
+namespace NColorManagement {
+    class CImageDescription;
+    using PImageDescription = Hyprutils::Memory::CSharedPointer<CImageDescription>;
 }
 
 namespace Aquamarine {
@@ -124,8 +128,8 @@ private:
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     EGLContext m_eglContext = EGL_NO_CONTEXT;
 
-    // ImageDescription
-    NColorManagement::PImageDescription m_imageDescription;
+    // ImageDescription 指针（仅存储，不依赖具体类型）
+    void* m_imageDescription = nullptr;
 
     mutable std::mutex m_bufferMutex;
     std::atomic<bool> m_destroying{false};
