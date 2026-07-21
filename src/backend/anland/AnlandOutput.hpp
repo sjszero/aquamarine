@@ -17,6 +17,8 @@
 #include <GLES3/gl32.h>
 #include <GLES2/gl2ext.h>
 
+#include "helpers/cm/ColorManagement.hpp"
+
 extern "C" {
 #include "display_producer.h"
 }
@@ -41,7 +43,7 @@ public:
     virtual std::vector<SDRMFormat> getRenderFormats() override;
     virtual bool pendingPageFlip() override { return m_framePending; }
     virtual void scheduleFrame(const scheduleFrameReason reason = AQ_SCHEDULE_UNKNOWN) override;
-    virtual size_t getGammaSize() override { return 256; }  // 报告支持 Gamma 表
+    virtual size_t getGammaSize() override { return 256; }
     virtual size_t getDeGammaSize() override { return 0; }
     virtual bool destroy() override { return false; }
 
@@ -64,6 +66,12 @@ public:
     int getBufferCount() const { return m_bufferCount; }
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
     CSharedPointer<CBackend> getCBackend() const;
+
+    // EGL 上下文管理
+    void setEGL(EGLDisplay dpy, EGLContext ctx) { 
+        m_eglDisplay = dpy; 
+        m_eglContext = ctx; 
+    }
 
     display_ctx* display();
     uint32_t getWidth() const { return m_width; }
@@ -111,6 +119,13 @@ private:
     uint32_t m_height = 0;
     uint32_t m_refresh = 60000;
     uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
+
+    // EGL 上下文
+    EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
+    EGLContext m_eglContext = EGL_NO_CONTEXT;
+
+    // ImageDescription
+    NColorManagement::PImageDescription m_imageDescription;
 
     mutable std::mutex m_bufferMutex;
     std::atomic<bool> m_destroying{false};

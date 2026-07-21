@@ -68,35 +68,58 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      m_aqBackend = CBackend::create(implementations, options);
  
-@@ -540,6 +575,14 @@ void CCompositor::initAllSignals() {
+@@ -562,6 +593,40 @@ void CCompositor::initAllSignals() {
+         });
+     }
  }
  
- void CCompositor::removeAllSignals() {
-+    // Anland: 清理后端资源
-+    if (m_aqBackend) {
-+        for (auto const& impl : m_aqBackend->getImplementations()) {
-+            if (impl->type() == Aquamarine::AQ_BACKEND_ANLAND) {
-+                // CAnlandBackend 会在析构时清理自身
-+            }
-+        }
-+    }
-     ;
- }
- 
-@@ -558,6 +600,12 @@ void CCompositor::cleanEnvironment() {
- 
- void CCompositor::stopCompositor() {
-     Log::logger->log(Log::DEBUG, "Hyprland is stopping!");
- 
-+    // Anland: 清理环境
-+    if (getenv("ANLAND")) {
-+        unsetenv("ANLAND");
-+        unsetenv("EGL_PLATFORM");
++// Anland: 传递 EGL 上下文到 Anland 后端
++static void passEGLToAnlandBackend(SP<Aquamarine::CBackend> backend) {
++#ifdef HAS_ANLAND_BACKEND
++    if (!backend || !g_pHyprOpenGL)
++        return;
++
++    EGLDisplay dpy = g_pHyprOpenGL->m_eglDisplay;
++    EGLContext ctx = g_pHyprOpenGL->m_eglContext;
++
++    if (dpy == EGL_NO_DISPLAY || ctx == EGL_NO_CONTEXT) {
++        Log::logger->log(Log::WARN, "Anland: EGL context not available yet, will retry later");
++        return;
 +    }
 +
-     // this stops the wayland loop, wl_display_run
-     wl_display_terminate(m_wlDisplay);
-@@ -1064,6 +1113,14 @@ void CCompositor::createLockFile() {
++    for (auto const& impl : backend->getImplementations()) {
++        if (impl->type() == Aquamarine::AQ_BACKEND_ANLAND) {
++            auto* anlandImpl = static_cast<Aquamarine::CAnlandBackend*>(impl.get());
++            if (!anlandImpl)
++                continue;
++
++            auto output = anlandImpl->getOutput();
++            if (!output)
++                continue;
++
++            output->setEGL(dpy, ctx);
++            Log::logger->log(Log::DEBUG, "Anland: EGL context passed to Anland backend");
++
++            // 只需要传递给第一个 Anland 后端
++            break;
++        }
++    }
++#endif
++}
++
+ void CCompositor::removeAllSignals() {
+     ;
+@@ -625,6 +691,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+ 
+         } break;
+         case STAGE_LATE: {
++            // Anland: 在 OpenGL 初始化后传递 EGL 上下文
++            passEGLToAnlandBackend(m_aqBackend);
++
+             Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
+             g_pHyprCtl = makeUnique<CHyprCtl>();
+ 
+@@ -1064,6 +1133,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {
      const auto PATH = m_instancePath + "/hyprland.lock";
@@ -108,9 +131,32 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +        // 不清理 ANLAND_SOCKET，可能被其他进程使用
 +    }
 +
-+    // Anland: 清理环境
      if (std::filesystem::exists(PATH))
          std::filesystem::remove(PATH);
+diff --git a/src/Compositor.hpp b/src/Compositor.hpp
+--- a/src/Compositor.hpp
++++ b/src/Compositor.hpp
+@@ -53,6 +53,7 @@ class CCompositor {
+     bool                                         m_unsafeState    = false; // unsafe state is when there is no monitors
+     PHLMONITORREF                                m_unsafeOutput;           // fallback output for the unsafe state
+     bool                                         m_isShuttingDown         = false;
++    bool                                         m_useAnland              = false; // Anland: 是否使用 Anland 后端
+     bool                                         m_finalRequests          = false;
+     bool                                         m_desktopEnvSet          = false;
+     bool                                         m_wantsXwayland          = true;
+diff --git a/src/Compositor.hpp b/src/Compositor.hpp
+--- a/src/Compositor.hpp
++++ b/src/Compositor.hpp
+@@ -157,6 +158,9 @@ class CCompositor {
+     void                                ensureWorkspacesOnAssignedMonitors();
+     std::optional<unsigned int>         getVTNr();
+     bool                                isVRRActiveOnAnyMonitor() const;
+ 
++    // Anland: 获取后端实例
++    SP<Aquamarine::CBackend> getBackend() const { return m_aqBackend; }
++
+     NColorManagement::PImageDescription getPreferredImageDescription();
+     NColorManagement::PImageDescription getHDRImageDescription();
 diff --git a/src/main.cpp b/src/main.cpp
 --- a/src/main.cpp
 +++ b/src/main.cpp
@@ -177,14 +223,17 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
  if(BUILT_WITH_NIX)
    add_compile_definitions(BUILT_WITH_NIX)
  endif()
-diff --git a/src/Compositor.hpp b/src/Compositor.hpp
---- a/src/Compositor.hpp
-+++ b/src/Compositor.hpp
-@@ -53,6 +53,7 @@ class CCompositor {
-     bool                                         m_unsafeState    = false; // unsafe state is when there is no monitors
-     PHLMONITORREF                                m_unsafeOutput;           // fallback output for the unsafe state
-     bool                                         m_isShuttingDown         = false;
-+    bool                                         m_useAnland              = false; // Anland: 是否使用 Anland 后端
-     bool                                         m_finalRequests          = false;
-     bool                                         m_desktopEnvSet          = false;
-     bool                                         m_wantsXwayland          = true;
+diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
+--- a/src/render/OpenGL.hpp
++++ b/src/render/OpenGL.hpp
+@@ -68,6 +68,10 @@ namespace Render::GL {
+         EGLDisplay                     m_eglDisplay = nullptr;
+         EGLDeviceEXT                   m_eglDevice  = nullptr;
+ 
++        // 公开 EGL 成员以便 Anland 后端访问
++        EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
++        EGLContext getEGLContext() const { return m_eglContext; }
++
+         std::map<PHLMONITORREF, SP<IFramebuffer>> m_monitorBGFBs;
+ 
+         struct {

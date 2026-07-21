@@ -12,10 +12,14 @@
 #include <cerrno>
 #include <chrono>
 
+#include "helpers/cm/ColorManagement.hpp"
+
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+
+using namespace NColorManagement;
 
 namespace Aquamarine {
 
@@ -23,11 +27,6 @@ using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::Math::CRegion;
 
-/* ============================================================
- * protocol_format_to_drm - 将协议格式转换为 DRM fourcc
- * 消费者使用 Android 的像素格式枚举:
- *   1 = RGBA_8888 -> DRM_FORMAT_ABGR8888
- * ============================================================ */
 static uint32_t protocol_format_to_drm(uint32_t fmt) {
     switch (fmt) {
     case 1:  // Android RGBA_8888
@@ -48,6 +47,9 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     this->subpixel = AQ_SUBPIXEL_UNKNOWN;
     this->enabled = false;
     this->state = makeShared<COutputState>();
+
+    // 设置默认的 sRGB 图像描述
+    m_imageDescription = getDefaultImageDescription();
 
     for (int i = 0; i < MAX_BUFS; i++) {
         m_slots[i].imported = false;
@@ -80,6 +82,11 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     m_refresh = refresh > 0 ? refresh : 60000;
     m_drmFormat = DRM_FORMAT_XRGB8888;
 
+    // 确保 ImageDescription 已设置
+    if (!m_imageDescription) {
+        m_imageDescription = getDefaultImageDescription();
+    }
+
     this->physicalSize = Hyprutils::Math::Vector2D(
         static_cast<float>(width) / 96.0f,
         static_cast<float>(height) / 96.0f
@@ -103,7 +110,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setMode(mode);
     this->state->setFormat(m_drmFormat);
 
-    // 设置默认的 Gamma 表（线性），使 Hyprland 认为支持颜色管理
+    // 设置默认的 Gamma 表
     std::vector<uint16_t> defaultGamma;
     defaultGamma.resize(256 * 3);
     for (int i = 0; i < 256; i++) {
@@ -197,7 +204,11 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
+    // 优先使用实际的 dmabuf 格式
     uint32_t actualFormat = m_drmFormat;
+    if (actualFormat == DRM_FORMAT_XRGB8888 && m_slots[0].imported) {
+        actualFormat = m_slots[0].format;
+    }
 
     if (!this->swapchain) {
         auto alloc = CAnlandAllocator::create(this);
@@ -348,6 +359,10 @@ void CAnlandOutput::importBuffers() {
         if (w > 0 && h > 0 && fmt != 0) {
             if (w != m_width || h != m_height || fmt != m_drmFormat) {
                 ANLAND_LOG("importBuffers: buffer size changed to %dx%d fmt 0x%x, updating output", w, h, fmt);
+                // 更新 ImageDescription 以匹配新的格式
+                if (fmt == DRM_FORMAT_ABGR8888 || fmt == DRM_FORMAT_ARGB8888) {
+                    m_imageDescription = getDefaultImageDescription();
+                }
                 updateMode(w, h, fmt);
             }
         }
@@ -360,9 +375,49 @@ bool CAnlandOutput::test() {
     return true;
 }
 
+std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
+    std::vector<SDRMFormat> formats;
+    
+    // 优先使用实际的 dmabuf 格式
+    if (m_drmFormat != DRM_FORMAT_INVALID) {
+        formats.push_back({.drmFormat = m_drmFormat, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    }
+    
+    // 提供常见后备格式
+    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    
+    if (m_backend) {
+        auto backendFormats = m_backend->getRenderFormats();
+        for (const auto& fmt : backendFormats) {
+            bool exists = false;
+            for (const auto& existing : formats) {
+                if (existing.drmFormat == fmt.drmFormat) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists) {
+                formats.push_back(fmt);
+            }
+        }
+    }
+    return formats;
+}
+
 bool CAnlandOutput::commit() {
     ANLAND_TRACE("commit START: shouldTriggerRefresh=%d", m_shouldTriggerRefresh);
     if (m_destroying) return true;
+
+    // 确保 EGL 上下文已绑定
+    if (m_eglDisplay != EGL_NO_DISPLAY && m_eglContext != EGL_NO_CONTEXT) {
+        EGLContext current = eglGetCurrentContext();
+        if (current != m_eglContext) {
+            eglMakeCurrent(m_eglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, m_eglContext);
+        }
+    }
 
     if (m_commitInProgress.exchange(true)) {
         ANLAND_TRACE("commit: already in progress");
@@ -444,9 +499,34 @@ bool CAnlandOutput::commit() {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
     }
 
-    // 添加全屏损伤（简化处理）
+    // 添加全屏损伤
     state->addDamage(CRegion(0, 0, m_width, m_height));
     slot.damage = CRegion();
+
+    // 创建 render fence 实现 GPU 同步
+    if (m_eglDisplay != EGL_NO_DISPLAY) {
+        EGLSyncKHR sync = eglCreateSyncKHR(m_eglDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr);
+        if (sync != EGL_NO_SYNC_KHR) {
+            int fenceFd = -1;
+            // 使用 eglDupNativeFenceFDANDROID 获取 fence fd
+            PFNEGLDUPNATIVEFENCEFDANDROIDPROC eglDupNativeFenceFDANDROID = 
+                (PFNEGLDUPNATIVEFENCEFDANDROIDPROC)eglGetProcAddress("eglDupNativeFenceFDANDROID");
+            if (eglDupNativeFenceFDANDROID) {
+                fenceFd = eglDupNativeFenceFDANDROID(m_eglDisplay, sync);
+            }
+            if (fenceFd >= 0) {
+                set_render_fence(dpy, fenceFd);
+                ANLAND_DEBUG("commit: created render fence fd=%d", fenceFd);
+            } else {
+                ANLAND_DEBUG("commit: failed to create render fence");
+            }
+            PFNEGLDESTROYSYNCKHRPROC eglDestroySyncKHR = 
+                (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
+            if (eglDestroySyncKHR) {
+                eglDestroySyncKHR(m_eglDisplay, sync);
+            }
+        }
+    }
 
     if (m_shouldTriggerRefresh) {
         m_shouldTriggerRefresh = false;
@@ -641,24 +721,6 @@ CSharedPointer<CBackend> CAnlandOutput::getCBackend() const {
 CSharedPointer<IBackendImplementation> CAnlandOutput::getBackend() {
     if (m_destroying || !m_backend) return nullptr;
     return m_backend->self.lock();
-}
-
-std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
-    std::vector<SDRMFormat> formats;
-    formats.push_back({.drmFormat = m_drmFormat, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    if (m_backend) {
-        auto backendFormats = m_backend->getRenderFormats();
-        for (const auto& fmt : backendFormats) {
-            if (fmt.drmFormat != m_drmFormat &&
-                fmt.drmFormat != DRM_FORMAT_XRGB8888 &&
-                fmt.drmFormat != DRM_FORMAT_ARGB8888) {
-                formats.push_back(fmt);
-            }
-        }
-    }
-    return formats;
 }
 
 } // namespace Aquamarine

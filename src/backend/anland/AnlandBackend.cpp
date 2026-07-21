@@ -88,8 +88,14 @@ bool CAnlandBackend::start() {
     m_running = true;
     m_inFallback = true;
 
+    // 初始化音频和摄像头
     anland_audio_start();
     anland_camera_start();
+
+    // 获取 EGL 上下文 (从 Hyprland 的全局状态)
+    // 注意: 这里需要通过 Hyprland 的全局指针访问
+    // 在实际使用中，Hyprland 会在创建后端后调用 setEGL 方法
+    // 我们稍后通过外部调用设置
 
     createOutputIfNeeded();
     emitOutputIfReady();
