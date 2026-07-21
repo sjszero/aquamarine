@@ -41,7 +41,7 @@ public:
     virtual std::vector<SDRMFormat> getRenderFormats() override;
     virtual bool pendingPageFlip() override { return m_framePending; }
     virtual void scheduleFrame(const scheduleFrameReason reason = AQ_SCHEDULE_UNKNOWN) override;
-    virtual size_t getGammaSize() override { return 0; }
+    virtual size_t getGammaSize() override { return 256; }  // 报告支持 Gamma 表
     virtual size_t getDeGammaSize() override { return 0; }
     virtual bool destroy() override { return false; }
 

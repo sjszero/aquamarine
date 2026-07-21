@@ -103,8 +103,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setMode(mode);
     this->state->setFormat(m_drmFormat);
 
-    // 初始化 Gamma 表，防止 getConvertedColor 失败
-    // 设置一个空的 gamma 表，让 Hyprland 知道我们有颜色管理支持
+    // 设置默认的 Gamma 表（线性），使 Hyprland 认为支持颜色管理
     std::vector<uint16_t> defaultGamma;
     defaultGamma.resize(256 * 3);
     for (int i = 0; i < 256; i++) {
