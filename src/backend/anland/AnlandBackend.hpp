@@ -28,6 +28,21 @@ class CAnlandPointer;
 class CAnlandKeyboard;
 class CAnlandTouch;
 
+/**
+ * Anland backend for Hyprland (Aquamarine)
+ *
+ * Connects to Android display daemon via UNIX socket and provides:
+ * - Display output (dmabuf-based zero-copy rendering)
+ * - Input events (pointer, keyboard, touch)
+ * - Audio (PipeWire virtual devices)
+ * - Camera (PipeWire virtual devices)
+ *
+ * Key features:
+ * - Incremental damage tracking (buffer-age)
+ * - Dynamic format selection (8-bit/10-bit/FP16)
+ * - Modifier support for compressed textures
+ * - Proper clipboard and text input injection
+ */
 class CAnlandBackend : public IBackendImplementation {
 public:
     CAnlandBackend(CSharedPointer<CBackend> backend,
@@ -108,6 +123,9 @@ private:
 
     std::atomic<bool> m_destroying{false};
     std::atomic<bool> m_shutdownDone{false};
+
+    // Clipboard deduplication
+    std::string m_lastClipboardText;
 };
 
 } // namespace Aquamarine

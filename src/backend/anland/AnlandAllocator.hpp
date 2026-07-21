@@ -17,6 +17,11 @@ class CAnlandOutput;
 class CAnlandDmaBuffer;
 class CBackend;
 
+/**
+ * Anland allocator - provides dmabuf buffers from the Android display daemon
+ *
+ * Simple round-robin allocator that reuses buffers after they are released.
+ */
 class CAnlandAllocator : public IAllocator {
 public:
     static CSharedPointer<IAllocator> create(CAnlandOutput* output);
@@ -32,6 +37,7 @@ private:
     CAnlandAllocator(CAnlandOutput* output);
     CAnlandOutput* m_output = nullptr;
     int m_lastAcquired = -1;
+    std::mutex m_mutex;
 };
 
 } // namespace Aquamarine

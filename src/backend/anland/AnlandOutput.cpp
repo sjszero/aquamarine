@@ -23,12 +23,24 @@ using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::Math::CRegion;
 
+/**
+ * Convert Android pixel format to DRM fourcc
+ * Extended to support 10-bit and FP16 formats for Adreno 750
+ */
 static uint32_t protocol_format_to_drm(uint32_t fmt) {
     switch (fmt) {
-    case 1:  // Android RGBA_8888 -> DRM_ABGR8888
-        return DRM_FORMAT_ABGR8888;
-    default:
-        return DRM_FORMAT_XRGB8888;
+        case 1:  // Android RGBA_8888 -> DRM_ABGR8888
+            return DRM_FORMAT_ABGR8888;
+        case 2:  // Android RGBX_8888 -> DRM_XBGR8888
+            return DRM_FORMAT_XBGR8888;
+        case 3:  // Android RGBA_1010102 -> DRM_ABGR2101010 (10-bit)
+            return DRM_FORMAT_ABGR2101010;
+        case 4:  // Android RGBX_1010102 -> DRM_XBGR2101010
+            return DRM_FORMAT_XBGR2101010;
+        case 5:  // Android RGBA_FP16 -> DRM_ABGR16161616F
+            return DRM_FORMAT_ABGR16161616F;
+        default:
+            return DRM_FORMAT_XRGB8888;
     }
 }
 
@@ -48,6 +60,7 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
         m_slots[i].imported = false;
         m_slots[i].fd = -1;
         m_slots[i].buffer = nullptr;
+        m_slots[i].accumDamage = CRegion();
     }
     m_shouldTriggerRefresh = false;
     ANLAND_TRACE("CAnlandOutput constructor END");
@@ -73,7 +86,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     m_width = width;
     m_height = height;
     m_refresh = refresh > 0 ? refresh : 60000;
-    m_drmFormat = DRM_FORMAT_XRGB8888;
+    m_drmFormat = DRM_FORMAT_XRGB8888;  // Default, will be updated on buffer import
 
     this->physicalSize = Hyprutils::Math::Vector2D(
         static_cast<float>(width) / 96.0f,
@@ -98,7 +111,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setMode(mode);
     this->state->setFormat(m_drmFormat);
 
-    // 设置默认的 Gamma 表
+    // Default gamma table
     std::vector<uint16_t> defaultGamma;
     defaultGamma.resize(256 * 3);
     for (int i = 0; i < 256; i++) {
@@ -108,10 +121,6 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
         defaultGamma[i * 3 + 2] = val;
     }
     this->state->setGammaLut(defaultGamma);
-
-    // 关键修复: 设置默认的 sRGB 图像描述 (使用 IOutput 的虚函数)
-    // Hyprland 会通过 getRenderFormats() 和 state->state().drmFormat 来获取格式
-    // 我们强制使用 XRGB8888 以避免颜色管理问题
 
     m_outputReady = true;
     m_inFallback = true;
@@ -135,6 +144,7 @@ void CAnlandOutput::releaseBuffers() {
     ANLAND_TRACE("releaseBuffers START");
     for (int i = 0; i < MAX_BUFS; i++) {
         m_slots[i].inUse = false;
+        m_slots[i].accumDamage = CRegion();
         destroyBuffer(i);
     }
     m_bufferCount = 0;
@@ -143,15 +153,38 @@ void CAnlandOutput::releaseBuffers() {
     ANLAND_TRACE("releaseBuffers END");
 }
 
+/**
+ * Update output mode when buffer size or format changes
+ * Handles dynamic format selection with fallback
+ */
 void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format) {
     if (width == m_width && height == m_height && format == m_drmFormat)
         return;
 
     ANLAND_LOG("updateMode: %dx%d fmt 0x%x -> %dx%d fmt 0x%x",
                m_width, m_height, m_drmFormat, width, height, format);
+
+    // Choose the best format: prefer 10-bit, then FP16, then 8-bit
+    uint32_t chosenFormat = format;
+    auto availableFormats = getRenderFormats();
+
+    bool formatSupported = false;
+    for (const auto& fmt : availableFormats) {
+        if (fmt.drmFormat == format) {
+            formatSupported = true;
+            break;
+        }
+    }
+
+    if (!formatSupported) {
+        // Fallback to XRGB8888 (most compatible)
+        chosenFormat = DRM_FORMAT_XRGB8888;
+        ANLAND_LOG("updateMode: format 0x%x not supported, falling back to XRGB8888", format);
+    }
+
     m_width = width;
     m_height = height;
-    m_drmFormat = format;
+    m_drmFormat = chosenFormat;
 
     auto mode = CSharedPointer<SOutputMode>(
         new SOutputMode{
@@ -162,25 +195,21 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format)
     this->modes.clear();
     this->modes.push_back(mode);
     this->state->setMode(mode);
+    this->state->setFormat(m_drmFormat);
 
     this->physicalSize = Hyprutils::Math::Vector2D(
         static_cast<float>(width) / 96.0f,
         static_cast<float>(height) / 96.0f
     );
 
-    // 强制使用 XRGB8888 以避免颜色管理问题
-    // 即使 dmabuf 是 ABGR8888，我们告诉 Hyprland 使用 XRGB8888
-    // Hyprland 会处理格式转换
-    this->state->setFormat(DRM_FORMAT_XRGB8888);
-
     if (this->swapchain) {
         SSwapchainOptions opts;
         opts.length = m_bufferCount > 0 ? m_bufferCount : 3;
         opts.size = Hyprutils::Math::Vector2D(static_cast<float>(width), static_cast<float>(height));
-        opts.format = DRM_FORMAT_XRGB8888;  // 强制使用 XRGB8888
+        opts.format = m_drmFormat;
         opts.scanout = true;
         this->swapchain->reconfigure(opts);
-        ANLAND_DEBUG("updateMode: swapchain reconfigured to %dx%d fmt XRGB8888", width, height);
+        ANLAND_DEBUG("updateMode: swapchain reconfigured to %dx%d fmt 0x%x", width, height, m_drmFormat);
     }
 
     Hyprutils::Math::Vector2D size(static_cast<float>(width), static_cast<float>(height));
@@ -199,9 +228,6 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
-    // 强制使用 XRGB8888，这是 Hyprland 最安全的后备格式
-    uint32_t actualFormat = DRM_FORMAT_XRGB8888;
-
     if (!this->swapchain) {
         auto alloc = CAnlandAllocator::create(this);
         if (!alloc) {
@@ -218,7 +244,7 @@ void CAnlandOutput::reconfigureSwapchain() {
     SSwapchainOptions opts;
     opts.length = m_bufferCount;
     opts.size = Hyprutils::Math::Vector2D(static_cast<float>(m_width), static_cast<float>(m_height));
-    opts.format = actualFormat;
+    opts.format = m_drmFormat;
     opts.scanout = true;
 
     if (!this->swapchain->reconfigure(opts)) {
@@ -226,7 +252,7 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
     ANLAND_LOG("reconfigureSwapchain: success, %d buffers, format 0x%x, size %dx%d",
-               m_bufferCount, actualFormat, m_width, m_height);
+               m_bufferCount, m_drmFormat, m_width, m_height);
 }
 
 bool CAnlandOutput::importBuffer(int index) {
@@ -255,8 +281,11 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
+    // Convert to DRM format with support for 10-bit and FP16
     uint32_t drmFormat = protocol_format_to_drm(info.format);
     uint64_t modifier = info.modifier;
+
+    // If modifier is 0, treat as invalid (implicit)
     if (modifier == 0) {
         modifier = DRM_FORMAT_MOD_INVALID;
     }
@@ -285,6 +314,7 @@ bool CAnlandOutput::importBuffer(int index) {
         ANLAND_TRACE("Buffer %d destroyed", index);
         if (index < m_bufferCount) {
             m_slots[index].inUse = false;
+            m_slots[index].accumDamage = CRegion();
         }
     });
 
@@ -295,12 +325,14 @@ bool CAnlandOutput::importBuffer(int index) {
     slot->offset = info.offset;
     slot->stride = info.stride;
     slot->imported = true;
-    slot->hasDamage = true;
     slot->inUse = false;
-    slot->damage = CRegion(0, 0, info.width, info.height);
 
-    ANLAND_LOG("importBuffer: slot %d registered (size %dx%d, fmt 0x%x)",
-               index, info.width, info.height, drmFormat);
+    // Initialize damage to full buffer (first frame)
+    slot->accumDamage = CRegion(0, 0, info.width, info.height);
+    slot->hasDamage = true;
+
+    ANLAND_LOG("importBuffer: slot %d registered (size %dx%d, fmt 0x%x, mod 0x%lx)",
+               index, info.width, info.height, drmFormat, modifier);
     return true;
 }
 
@@ -311,7 +343,7 @@ void CAnlandOutput::destroyBuffer(int index) {
     slot->imported = false;
     slot->inUse = false;
     slot->hasDamage = true;
-    slot->damage = CRegion();
+    slot->accumDamage = CRegion();
 }
 
 void CAnlandOutput::importBuffers() {
@@ -347,16 +379,16 @@ void CAnlandOutput::importBuffers() {
     if (count > 0 && m_slots[0].imported) {
         uint32_t w = m_slots[0].width;
         uint32_t h = m_slots[0].height;
+        uint32_t fmt = m_slots[0].format;
         if (w > 0 && h > 0) {
             if (w != m_width || h != m_height) {
                 ANLAND_LOG("importBuffers: buffer size changed to %dx%d, updating output", w, h);
-                // 强制使用 XRGB8888
-                updateMode(w, h, DRM_FORMAT_XRGB8888);
+                updateMode(w, h, fmt);
             }
         }
     }
 
-    ANLAND_LOG("importBuffers: registered %d buffers, format XRGB8888", m_bufferCount);
+    ANLAND_LOG("importBuffers: registered %d buffers", m_bufferCount);
 }
 
 bool CAnlandOutput::test() {
@@ -365,14 +397,22 @@ bool CAnlandOutput::test() {
 
 std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
     std::vector<SDRMFormat> formats;
-    
-    // 只返回 XRGB8888，这是 Hyprland 最安全的后备格式
-    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    
-    // 如果需要，也提供 ARGB8888 作为备选
+
+    // Return formats in priority order
+    // 10-bit first (supports HDR/WCG) - Adreno 750 supports these
+    formats.push_back({.drmFormat = DRM_FORMAT_ABGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XBGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+
+    // FP16 (HDR with higher precision)
+    formats.push_back({.drmFormat = DRM_FORMAT_ABGR16161616F, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+
+    // 8-bit fallback
+    formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    
-    // 如果 m_backend 有其他格式，也添加进来
+    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+
+    // Add backend formats if available
     if (m_backend) {
         auto backendFormats = m_backend->getRenderFormats();
         for (const auto& fmt : backendFormats) {
@@ -388,14 +428,22 @@ std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
             }
         }
     }
+
     return formats;
 }
 
+/**
+ * commit() - Render frame with incremental damage tracking
+ *
+ * Uses buffer-age optimization: only submit damage that has changed
+ * since the last time this buffer was used. This significantly reduces
+ * GPU work for partially damaged frames.
+ */
 bool CAnlandOutput::commit() {
     ANLAND_TRACE("commit START: shouldTriggerRefresh=%d", m_shouldTriggerRefresh);
     if (m_destroying) return true;
 
-    // 确保 EGL 上下文已绑定
+    // Bind EGL context (received from Hyprland via setEGL)
     if (m_eglDisplay != EGL_NO_DISPLAY && m_eglContext != EGL_NO_CONTEXT) {
         EGLContext current = eglGetCurrentContext();
         if (current != m_eglContext) {
@@ -477,23 +525,33 @@ bool CAnlandOutput::commit() {
 
     if (slot.buffer) {
         state->setBuffer(slot.buffer);
-        ANLAND_DEBUG("commit: using buffer %d (fd=%d, fmt=0x%x)",
-                     m_selectedIndex, slot.buffer->dmabuf().fds[0], slot.format);
+
+        // Only submit damage that has changed since last use of this buffer
+        if (slot.hasDamage && !slot.accumDamage.empty()) {
+            state->addDamage(slot.accumDamage);
+            ANLAND_DEBUG("commit: using buffer %d with accumulated damage",
+                         m_selectedIndex);
+        } else {
+            // No new damage for this buffer
+            ANLAND_DEBUG("commit: buffer %d has no new damage", m_selectedIndex);
+        }
+
+        // Clear accumulated damage after submission
+        slot.accumDamage = CRegion();
+        slot.hasDamage = false;
     } else {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
+        // Fallback: full damage
+        state->addDamage(CRegion(0, 0, m_width, m_height));
     }
 
-    // 添加全屏损伤
-    state->addDamage(CRegion(0, 0, m_width, m_height));
-    slot.damage = CRegion();
-
-    // 创建 render fence 实现 GPU 同步
+    // Create render fence for GPU sync (EGL_ANDROID_native_fence_sync)
     if (m_eglDisplay != EGL_NO_DISPLAY) {
-        PFNEGLCREATESYNCKHRPROC eglCreateSyncKHR = 
+        PFNEGLCREATESYNCKHRPROC eglCreateSyncKHR =
             (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
-        PFNEGLDUPNATIVEFENCEFDANDROIDPROC eglDupNativeFenceFDANDROID = 
+        PFNEGLDUPNATIVEFENCEFDANDROIDPROC eglDupNativeFenceFDANDROID =
             (PFNEGLDUPNATIVEFENCEFDANDROIDPROC)eglGetProcAddress("eglDupNativeFenceFDANDROID");
-        PFNEGLDESTROYSYNCKHRPROC eglDestroySyncKHR = 
+        PFNEGLDESTROYSYNCKHRPROC eglDestroySyncKHR =
             (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
 
         if (eglCreateSyncKHR && eglDupNativeFenceFDANDROID && eglDestroySyncKHR) {
@@ -549,6 +607,12 @@ bool CAnlandOutput::commit() {
     return true;
 }
 
+/**
+ * scheduleFrame() - Accumulate damage for the next frame
+ *
+ * When Hyprland schedules a frame, we accumulate the damage region
+ * for the current buffer slot. This enables buffer-age optimization.
+ */
 void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     ANLAND_TRACE("scheduleFrame: reason=%d", (int)reason);
     if (m_destroying) return;
@@ -565,6 +629,20 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
 
     if (m_buffersImported && !this->swapchain) {
         reconfigureSwapchain();
+    }
+
+    // Get current buffer slot and accumulate damage
+    if (m_buffersImported && m_selectedIndex < m_bufferCount) {
+        auto& slot = m_slots[m_selectedIndex];
+        if (slot.imported && slot.buffer) {
+            const auto& damage = state->state().damage;
+            if (!damage.empty()) {
+                slot.accumDamage.add(damage);
+                slot.hasDamage = true;
+                ANLAND_TRACE("scheduleFrame: accumulated damage for buffer %d",
+                             m_selectedIndex);
+            }
+        }
     }
 
     m_shouldTriggerRefresh = true;

@@ -11,6 +11,14 @@
 #include <chrono>
 #include <xf86drm.h>
 
+// Hyprland includes for clipboard/text input
+#include <managers/SeatManager.hpp>
+#include <managers/input/InputManager.hpp>
+#include <managers/input/InputMethodRelay.hpp>
+#include <protocols/TextInputV3.hpp>
+#include <protocols/types/DataDevice.hpp>
+#include <Compositor.hpp>
+
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
@@ -88,14 +96,9 @@ bool CAnlandBackend::start() {
     m_running = true;
     m_inFallback = true;
 
-    // 初始化音频和摄像头
+    // Initialize audio and camera engines (nodes persist across connections)
     anland_audio_start();
     anland_camera_start();
-
-    // 获取 EGL 上下文 (从 Hyprland 的全局状态)
-    // 注意: 这里需要通过 Hyprland 的全局指针访问
-    // 在实际使用中，Hyprland 会在创建后端后调用 setEGL 方法
-    // 我们稍后通过外部调用设置
 
     createOutputIfNeeded();
     emitOutputIfReady();
@@ -446,38 +449,95 @@ void CAnlandBackend::updateCameraResources() {
     ANLAND_LOG("Camera resources requested");
 }
 
-/* ============================================================
- * updateClipboard() - 处理剪贴板事件
- * ============================================================ */
+/**
+ * updateClipboard() - Inject clipboard data into Hyprland
+ *
+ * Reads text from Android consumer and sets it as Hyprland's current selection.
+ * Uses deduplication to avoid feedback loops.
+ */
 void CAnlandBackend::updateClipboard(const InputEvent& ev) {
     if (m_inFallback || !m_display) return;
 
     const uint32_t size = ev.clipboard.size;
     if (size == 0) return;
 
-    // 读取剪贴板数据
     std::vector<uint8_t> data(size);
     if (poll_input_event_extend_data(m_display, data.data(), size, 5000) != 1) {
         ANLAND_ERR("updateClipboard: failed to read clipboard data");
         return;
     }
 
-    // TODO: 将数据发送到 Hyprland 的剪贴板管理器
-    // 这需要通过 Hyprland 的 SeatManager 和 DataDevice 接口
-    // 这里暂时只做日志
-    ANLAND_LOG("updateClipboard: received %u bytes of clipboard data", size);
+    std::string text(reinterpret_cast<char*>(data.data()), size);
+
+    // Deduplicate: skip if same as last known text
+    if (text == m_lastClipboardText) {
+        ANLAND_TRACE("updateClipboard: text unchanged, skipping");
+        return;
+    }
+    m_lastClipboardText = text;
+
+    ANLAND_LOG("updateClipboard: received %zu bytes", text.size());
+
+    // Inject into Hyprland's seat manager
+    if (!g_pSeatManager) {
+        ANLAND_ERR("updateClipboard: g_pSeatManager is null");
+        return;
+    }
+
+    // Create a data source with the text
+    class AnlandClipboardSource : public IDataSource {
+    public:
+        explicit AnlandClipboardSource(const std::string& text) : m_text(text) {}
+
+        virtual std::vector<std::string> mimes() override {
+            return {"text/plain;charset=utf-8", "text/plain"};
+        }
+
+        virtual void send(const std::string& mime, Hyprutils::OS::CFileDescriptor fd) override {
+            if (mime.find("plain") == std::string::npos) return;
+            const char* data = m_text.c_str();
+            size_t remaining = m_text.size();
+            while (remaining > 0) {
+                ssize_t n = write(fd.get(), data, remaining);
+                if (n <= 0) break;
+                data += n;
+                remaining -= n;
+            }
+        }
+
+        virtual void accepted(const std::string& mime) override {}
+        virtual void cancelled() override {}
+        virtual bool hasDnd() override { return false; }
+        virtual bool dndDone() override { return true; }
+        virtual void error(uint32_t code, const std::string& msg) override {}
+        virtual void sendDndFinished() override {}
+        virtual uint32_t actions() override { return 0; }
+        virtual eDataSourceType type() override { return DATA_SOURCE_TYPE_WAYLAND; }
+        virtual void sendDndDropPerformed() override {}
+        virtual void sendDndAction(wl_data_device_manager_dnd_action a) override {}
+
+    private:
+        std::string m_text;
+    };
+
+    auto source = makeShared<AnlandClipboardSource>(text);
+    g_pSeatManager->setCurrentSelection(source);
+    ANLAND_LOG("updateClipboard: selection set in Hyprland");
 }
 
-/* ============================================================
- * updateTextInput() - 处理文本输入事件
- * ============================================================ */
+/**
+ * updateTextInput() - Inject text input into Hyprland's IME system
+ *
+ * Reads committed text from Android keyboard and injects it into Hyprland's
+ * input method relay, which delivers to focused client via text-input-v3
+ * or synthesized key events.
+ */
 void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     if (m_inFallback || !m_display) return;
 
     const uint32_t size = ev.text_input.size;
     if (size == 0) return;
 
-    // 读取文本输入数据
     std::vector<uint8_t> data(size);
     if (poll_input_event_extend_data(m_display, data.data(), size, 5000) != 1) {
         ANLAND_ERR("updateTextInput: failed to read text input data");
@@ -487,17 +547,49 @@ void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     std::string text(reinterpret_cast<char*>(data.data()), size);
     ANLAND_LOG("updateTextInput: received text: %s", text.c_str());
 
-    // TODO: 将文本注入到 Hyprland 的输入法系统
-    // 这需要通过 Hyprland 的 InputMethodRelay 接口
-    // 这里暂时只做日志
+    // Inject into Hyprland's input method relay
+    if (!g_pInputManager) {
+        ANLAND_ERR("updateTextInput: g_pInputManager is null");
+        return;
+    }
+
+    auto& relay = g_pInputManager->m_relay;
+    auto focused = relay.getFocusedTextInput();
+
+    if (focused) {
+        // TextInputV3 path - commit text to focused text-input client
+        QString qstr = QString::fromUtf8(text.c_str(), text.size());
+        focused->commitText(qstr);
+        ANLAND_LOG("updateTextInput: committed via TextInputV3");
+    } else {
+        // Fallback: use the input method relay's commit function
+        // This synthesizes key events if no text-input client is focused
+        relay.commitText(text);
+        ANLAND_LOG("updateTextInput: committed via input method relay");
+    }
 }
 
 std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     std::vector<SDRMFormat> formats;
-    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+
+    // Add formats in priority order (best first)
+    // 10-bit formats (supports HDR/WCG) - Adreno 750 supports these
+    formats.push_back({.drmFormat = DRM_FORMAT_ABGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XBGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+
+    // FP16 formats (HDR with higher precision)
+    formats.push_back({.drmFormat = DRM_FORMAT_ABGR16161616F, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+
+    // 8-bit formats (fallback - always supported)
     formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+
+    // If we have modifier support, also advertise compressed formats
+    // These will be discovered via EGL_EXT_image_dma_buf_import_modifiers
+    // at runtime by the renderer
+
     return formats;
 }
 

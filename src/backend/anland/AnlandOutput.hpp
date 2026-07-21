@@ -21,7 +21,6 @@ extern "C" {
 #include "display_producer.h"
 }
 
-// 前向声明 ImageDescription 类型（避免包含 Hyprland 头文件）
 namespace NColorManagement {
     class CImageDescription;
     using PImageDescription = Hyprutils::Memory::CSharedPointer<CImageDescription>;
@@ -35,6 +34,13 @@ using Hyprutils::Memory::makeShared;
 class CAnlandBackend;
 class CAnlandDmaBuffer;
 
+/**
+ * Anland output implementation with:
+ * - Incremental damage tracking (buffer-age)
+ * - Dynamic format selection (8/10/FP16)
+ * - EGL fence synchronization
+ * - Multi-buffer support (MAX_BUFS = 8)
+ */
 class CAnlandOutput : public IOutput {
 public:
     explicit CAnlandOutput(CAnlandBackend* backend);
@@ -57,7 +63,7 @@ public:
     virtual void setCursorVisible(bool visible) override {}
     virtual Hyprutils::Math::Vector2D cursorPlaneSize() override { return {-1, -1}; }
 
-    // Anland 特有
+    // Anland specific
     bool initialize(uint32_t width, uint32_t height, uint32_t refresh);
     void releaseBuffers();
     void updateRefreshRate(uint32_t refresh);
@@ -66,15 +72,15 @@ public:
     bool isInFallback() const { return m_inFallback; }
     void onBufferReady();
 
-    // 用于 CAnlandAllocator
+    // For allocator
     int getBufferCount() const { return m_bufferCount; }
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
     CSharedPointer<CBackend> getCBackend() const;
 
-    // EGL 上下文管理
-    void setEGL(EGLDisplay dpy, EGLContext ctx) { 
-        m_eglDisplay = dpy; 
-        m_eglContext = ctx; 
+    // EGL context (passed from Hyprland)
+    void setEGL(EGLDisplay dpy, EGLContext ctx) {
+        m_eglDisplay = dpy;
+        m_eglContext = ctx;
     }
 
     display_ctx* display();
@@ -89,7 +95,7 @@ private:
     void reconfigureSwapchain();
     void updateMode(uint32_t width, uint32_t height, uint32_t format);
 
-    // 损伤跟踪
+    // Buffer slot with accumulative damage (buffer-age)
     struct BufferSlot {
         int fd = -1;
         uint32_t width = 0, height = 0;
@@ -102,7 +108,9 @@ private:
         bool imported = false;
         bool inUse = false;
         bool hasDamage = true;
-        Hyprutils::Math::CRegion damage;
+
+        // Accumulative damage for buffer-age optimization
+        Hyprutils::Math::CRegion accumDamage;
     };
 
     std::array<BufferSlot, MAX_BUFS> m_slots;
@@ -124,11 +132,11 @@ private:
     uint32_t m_refresh = 60000;
     uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
 
-    // EGL 上下文
+    // EGL context (passed from Hyprland's OpenGL renderer)
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     EGLContext m_eglContext = EGL_NO_CONTEXT;
 
-    // ImageDescription 指针（仅存储，不依赖具体类型）
+    // Color management (placeholder)
     void* m_imageDescription = nullptr;
 
     mutable std::mutex m_bufferMutex;

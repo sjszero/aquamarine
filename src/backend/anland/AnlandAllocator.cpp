@@ -33,6 +33,8 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
         return nullptr;
     }
 
+    std::lock_guard<std::mutex> lock(m_mutex);
+
     int count = m_output->getBufferCount();
     if (count <= 0) {
         ANLAND_ERROR("acquire: no buffers available");

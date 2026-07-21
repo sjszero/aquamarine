@@ -33,8 +33,17 @@ namespace Aquamarine {
     };
 
     enum eBackendRequestMode : uint32_t {
+        /*
+            Require the provided backend, will error out if it's not available.
+        */
         AQ_BACKEND_REQUEST_MANDATORY = 0,
+        /*
+            Start the backend if it's available
+        */
         AQ_BACKEND_REQUEST_IF_AVAILABLE,
+        /*
+            If any IF_AVAILABLE backend fails, use this one
+        */
         AQ_BACKEND_REQUEST_FALLBACK,
     };
 
@@ -60,7 +69,7 @@ namespace Aquamarine {
 
     struct SPollFD {
         int                       fd = -1;
-        std::function<void(void)> onSignal;
+        std::function<void(void)> onSignal; /* call this when signaled */
     };
 
     class IBackendImplementation {
@@ -82,7 +91,7 @@ namespace Aquamarine {
         virtual std::vector<SDRMFormat>                                    getCursorFormats()                         = 0;
         virtual bool                                                       createOutput(const std::string& name = "") = 0;
         virtual Hyprutils::Memory::CSharedPointer<IAllocator>              preferredAllocator()                       = 0;
-        virtual std::vector<SDRMFormat>                                    getRenderableFormats()                     = 0;
+        virtual std::vector<SDRMFormat>                                    getRenderableFormats(); // empty = use getRenderFormats
         virtual std::vector<Hyprutils::Memory::CSharedPointer<IAllocator>> getAllocators()                           = 0;
         virtual Hyprutils::Memory::CWeakPointer<IBackendImplementation>    getPrimary()                               = 0;
         virtual int                                                        drmRenderNodeFD()                          = 0;
@@ -90,34 +99,44 @@ namespace Aquamarine {
 
     class CBackend {
       public:
-        static Hyprutils::Memory::CSharedPointer<CBackend> create(
-            const std::vector<SBackendImplementationOptions>& backends,
-            const SBackendOptions& options);
+        /* Create a backend, with the provided options. May return a single or a multi-backend. */
+        static Hyprutils::Memory::CSharedPointer<CBackend> create(const std::vector<SBackendImplementationOptions>& backends, const SBackendOptions& options);
 
         ~CBackend();
 
+        /* start the backend. Initializes all the stuff, and will return true on success, false on fail. */
         bool start();
 
         void log(eBackendLogLevel level, const std::string& msg);
 
+        /* Gets all the FDs you have to poll. When any single one fires, call its onPoll */
         std::vector<Hyprutils::Memory::CSharedPointer<SPollFD>> getPollFDs();
 
+        /* Checks if the backend has a session - iow if it's a DRM backend */
         bool hasSession();
 
+        /* Get the primary DRM FD */
         int drmFD();
 
+        /* Get the primary DRM RenderNode */
         int drmRenderNodeFD();
 
+        /* Get the render formats the primary backend supports */
         std::vector<SDRMFormat> getPrimaryRenderFormats();
 
+        /* get a vector of the backend implementations available */
         const std::vector<Hyprutils::Memory::CSharedPointer<IBackendImplementation>>& getImplementations();
 
+        /* push an idle event to the queue */
         void addIdleEvent(Hyprutils::Memory::CSharedPointer<std::function<void(void)>> fn);
 
+        /* remove an idle event from the queue */
         void removeIdleEvent(Hyprutils::Memory::CSharedPointer<std::function<void(void)>> pfn);
 
+        // utils
         int reopenDRMNode(int drmFD, bool allowRenderNode = true);
 
+        // called when a new DRM card is hotplugged
         void onNewGpu(std::string path);
 
         struct {

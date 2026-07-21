@@ -68,7 +68,7 @@ namespace Aquamarine {
 
         // frame loop
         bool frameScheduledWhileWaiting = false;
-        bool readyForFrameCallback      = false; // true after attaching a buffer
+        bool readyForFrameCallback      = true; // true after attaching a buffer
         bool frameScheduled             = false;
 
         struct {

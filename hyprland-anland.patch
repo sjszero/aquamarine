@@ -6,7 +6,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
      if (!m_isShuttingDown && !m_onlyConfigVerification)
          cleanup();
 +
-+    // Anland: 清理环境
++    // Anland: 清理环境变量
 +    if (getenv("ANLAND")) {
 +        unsetenv("ANLAND");
 +        unsetenv("EGL_PLATFORM");
@@ -68,7 +68,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      m_aqBackend = CBackend::create(implementations, options);
  
-@@ -562,6 +593,40 @@ void CCompositor::initAllSignals() {
+@@ -562,6 +593,48 @@ void CCompositor::initAllSignals() {
          });
      }
  }
@@ -98,6 +98,14 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +                continue;
 +
 +            output->setEGL(dpy, ctx);
++
++            // 传递显式同步支持状态
++            if (g_pHyprOpenGL->explicitSyncSupported()) {
++                Log::logger->log(Log::DEBUG, "Anland: Explicit sync supported (EGL_ANDROID_native_fence_sync)");
++            } else {
++                Log::logger->log(Log::WARN, "Anland: Explicit sync NOT supported, falling back to implicit sync");
++            }
++
 +            Log::logger->log(Log::DEBUG, "Anland: EGL context passed to Anland backend");
 +
 +            // 只需要传递给第一个 Anland 后端
@@ -109,7 +117,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,6 +691,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,6 +698,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
@@ -119,20 +127,39 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
              Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
              g_pHyprCtl = makeUnique<CHyprCtl>();
  
-@@ -1064,6 +1133,13 @@ void CCompositor::createLockFile() {
+@@ -1064,6 +1140,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {
      const auto PATH = m_instancePath + "/hyprland.lock";
- 
++
 +    // Anland: 清理环境
 +    if (getenv("ANLAND")) {
 +        unsetenv("ANLAND");
 +        unsetenv("EGL_PLATFORM");
 +        // 不清理 ANLAND_SOCKET，可能被其他进程使用
 +    }
-+
+ 
      if (std::filesystem::exists(PATH))
          std::filesystem::remove(PATH);
+@@ -1092,6 +1175,18 @@ void CCompositor::cleanup() {
+ 
+     m_isShuttingDown = true;
+ 
++    // Anland: 在 cleanup 中确保 EGL 上下文释放
++    if (getenv("ANLAND")) {
++        for (auto const& impl : m_aqBackend->getImplementations()) {
++            if (impl->type() == Aquamarine::AQ_BACKEND_ANLAND) {
++                auto* anlandImpl = static_cast<Aquamarine::CAnlandBackend*>(impl.get());
++                if (anlandImpl) {
++                    anlandImpl->shutdown();
++                }
++            }
++        }
++    }
++
+ #ifdef USES_SYSTEMD
+     if (NSystemd::sdBooted() > 0 && !Env::envEnabled("HYPRLAND_NO_SD_NOTIFY"))
+         NSystemd::sdNotify(0, "STOPPING=1");
 diff --git a/src/Compositor.hpp b/src/Compositor.hpp
 --- a/src/Compositor.hpp
 +++ b/src/Compositor.hpp
@@ -144,17 +171,14 @@ diff --git a/src/Compositor.hpp b/src/Compositor.hpp
      bool                                         m_finalRequests          = false;
      bool                                         m_desktopEnvSet          = false;
      bool                                         m_wantsXwayland          = true;
-diff --git a/src/Compositor.hpp b/src/Compositor.hpp
---- a/src/Compositor.hpp
-+++ b/src/Compositor.hpp
 @@ -157,6 +158,9 @@ class CCompositor {
      void                                ensureWorkspacesOnAssignedMonitors();
      std::optional<unsigned int>         getVTNr();
      bool                                isVRRActiveOnAnyMonitor() const;
- 
++
 +    // Anland: 获取后端实例
 +    SP<Aquamarine::CBackend> getBackend() const { return m_aqBackend; }
-+
+ 
      NColorManagement::PImageDescription getPreferredImageDescription();
      NColorManagement::PImageDescription getHDRImageDescription();
 diff --git a/src/main.cpp b/src/main.cpp
@@ -226,13 +250,14 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
 --- a/src/render/OpenGL.hpp
 +++ b/src/render/OpenGL.hpp
-@@ -68,6 +68,10 @@ namespace Render::GL {
+@@ -68,6 +68,11 @@ namespace Render::GL {
          EGLDisplay                     m_eglDisplay = nullptr;
          EGLDeviceEXT                   m_eglDevice  = nullptr;
  
 +        // 公开 EGL 成员以便 Anland 后端访问
 +        EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
 +        EGLContext getEGLContext() const { return m_eglContext; }
++        bool explicitSyncSupported() const { return m_exts.EGL_ANDROID_native_fence_sync_ext; }
 +
          std::map<PHLMONITORREF, SP<IFramebuffer>> m_monitorBGFBs;
  
