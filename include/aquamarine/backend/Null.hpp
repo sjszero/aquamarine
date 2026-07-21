@@ -1,97 +1,47 @@
-// src/backend/Null.cpp
-#include <aquamarine/backend/Null.hpp>
-#include <fcntl.h>
-#include <ctime>
-#include <sys/timerfd.h>
-#include <cstring>
-#include "Shared.hpp"
+// include/aquamarine/backend/Null.hpp
+#pragma once
 
-using namespace Aquamarine;
-using namespace Hyprutils::Memory;
-using namespace Hyprutils::Math;
-#define SP CSharedPointer
+#include "./Backend.hpp"
+#include "../allocator/Swapchain.hpp"
+#include "../output/Output.hpp"
+#include <hyprutils/memory/WeakPtr.hpp>
 
-Aquamarine::CNullBackend::~CNullBackend() {
-    ;
-}
+namespace Aquamarine {
+    class CBackend;
+    class IAllocator;
 
-Aquamarine::CNullBackend::CNullBackend(SP<CBackend> backend_) : backend(backend_) {
-    ;
-}
+    class CNullBackend : public IBackendImplementation {
+      public:
+        virtual ~CNullBackend();
+        virtual eBackendType                                               type();
+        virtual bool                                                       start();
+        virtual std::vector<Hyprutils::Memory::CSharedPointer<SPollFD>>    pollFDs();
+        virtual int                                                        drmFD();
+        virtual bool                                                       dispatchEvents();
+        virtual uint32_t                                                   capabilities();
+        virtual bool                                                       setCursor(Hyprutils::Memory::CSharedPointer<IBuffer> buffer, const Hyprutils::Math::Vector2D& hotspot);
+        virtual void                                                       onReady();
+        virtual std::vector<SDRMFormat>                                    getRenderFormats();
+        virtual std::vector<SDRMFormat>                                    getCursorFormats();
+        virtual bool                                                       createOutput(const std::string& name = "");
+        virtual Hyprutils::Memory::CSharedPointer<IAllocator>              preferredAllocator();
+        virtual std::vector<Hyprutils::Memory::CSharedPointer<IAllocator>> getAllocators();
+        virtual Hyprutils::Memory::CWeakPointer<IBackendImplementation>    getPrimary();
+        virtual int                                                        drmRenderNodeFD();
+        virtual std::vector<SDRMFormat>                                    getRenderableFormats() override;
 
-eBackendType Aquamarine::CNullBackend::type() {
-    return eBackendType::AQ_BACKEND_NULL;
-}
+        Hyprutils::Memory::CWeakPointer<CNullBackend>                      self;
 
-bool Aquamarine::CNullBackend::start() {
-    return true;
-}
+        void                                                               setFormats(const std::vector<SDRMFormat>& fmts);
 
-std::vector<SP<SPollFD>> Aquamarine::CNullBackend::pollFDs() {
-    return {};
-}
+      private:
+        CNullBackend(Hyprutils::Memory::CSharedPointer<CBackend> backend_);
 
-int Aquamarine::CNullBackend::drmFD() {
-    return -1;
-}
+        Hyprutils::Memory::CWeakPointer<CBackend> backend;
 
-int Aquamarine::CNullBackend::drmRenderNodeFD() {
-    return -1;
-}
+        std::vector<SDRMFormat>                   m_formats;
 
-bool Aquamarine::CNullBackend::dispatchEvents() {
-    return true;
-}
-
-uint32_t Aquamarine::CNullBackend::capabilities() {
-    return 0;
-}
-
-bool Aquamarine::CNullBackend::setCursor(SP<IBuffer> buffer, const Hyprutils::Math::Vector2D& hotspot) {
-    return false;
-}
-
-void Aquamarine::CNullBackend::onReady() {
-    ;
-}
-
-std::vector<SDRMFormat> Aquamarine::CNullBackend::getRenderFormats() {
-    for (const auto& impl : backend->getImplementations()) {
-        if (impl->type() != AQ_BACKEND_DRM || impl->getRenderableFormats().empty())
-            continue;
-        return impl->getRenderableFormats();
-    }
-
-    return m_formats;
-}
-
-void Aquamarine::CNullBackend::setFormats(const std::vector<SDRMFormat>& fmts) {
-    m_formats = fmts;
-}
-
-std::vector<SDRMFormat> Aquamarine::CNullBackend::getCursorFormats() {
-    return {}; // No cursor support
-}
-
-bool Aquamarine::CNullBackend::createOutput(const std::string& name) {
-    return false;
-}
-
-SP<IAllocator> Aquamarine::CNullBackend::preferredAllocator() {
-    return backend->primaryAllocator;
-}
-
-std::vector<SP<IAllocator>> Aquamarine::CNullBackend::getAllocators() {
-    return {backend->primaryAllocator};
-}
-
-Hyprutils::Memory::CWeakPointer<IBackendImplementation> Aquamarine::CNullBackend::getPrimary() {
-    return {};
-}
-
-/* ============================================================
- * CNullBackend::getRenderableFormats() - 可渲染格式
- * ============================================================ */
-std::vector<SDRMFormat> Aquamarine::CNullBackend::getRenderableFormats() {
-    return getRenderFormats();
-}
+        friend class CBackend;
+        friend class CHeadlessOutput;
+    };
+};
