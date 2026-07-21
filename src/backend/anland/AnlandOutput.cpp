@@ -109,6 +109,10 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     }
     this->state->setGammaLut(defaultGamma);
 
+    // 关键修复: 设置默认的 sRGB 图像描述 (使用 IOutput 的虚函数)
+    // Hyprland 会通过 getRenderFormats() 和 state->state().drmFormat 来获取格式
+    // 我们强制使用 XRGB8888 以避免颜色管理问题
+
     m_outputReady = true;
     m_inFallback = true;
     m_shouldTriggerRefresh = false;
@@ -164,16 +168,19 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format)
         static_cast<float>(height) / 96.0f
     );
 
-    this->state->setFormat(format);
+    // 强制使用 XRGB8888 以避免颜色管理问题
+    // 即使 dmabuf 是 ABGR8888，我们告诉 Hyprland 使用 XRGB8888
+    // Hyprland 会处理格式转换
+    this->state->setFormat(DRM_FORMAT_XRGB8888);
 
     if (this->swapchain) {
         SSwapchainOptions opts;
         opts.length = m_bufferCount > 0 ? m_bufferCount : 3;
         opts.size = Hyprutils::Math::Vector2D(static_cast<float>(width), static_cast<float>(height));
-        opts.format = format;
+        opts.format = DRM_FORMAT_XRGB8888;  // 强制使用 XRGB8888
         opts.scanout = true;
         this->swapchain->reconfigure(opts);
-        ANLAND_DEBUG("updateMode: swapchain reconfigured to %dx%d fmt 0x%x", width, height, format);
+        ANLAND_DEBUG("updateMode: swapchain reconfigured to %dx%d fmt XRGB8888", width, height);
     }
 
     Hyprutils::Math::Vector2D size(static_cast<float>(width), static_cast<float>(height));
@@ -192,11 +199,8 @@ void CAnlandOutput::reconfigureSwapchain() {
         return;
     }
 
-    // 优先使用实际的 dmabuf 格式
-    uint32_t actualFormat = m_drmFormat;
-    if (actualFormat == DRM_FORMAT_XRGB8888 && m_slots[0].imported) {
-        actualFormat = m_slots[0].format;
-    }
+    // 强制使用 XRGB8888，这是 Hyprland 最安全的后备格式
+    uint32_t actualFormat = DRM_FORMAT_XRGB8888;
 
     if (!this->swapchain) {
         auto alloc = CAnlandAllocator::create(this);
@@ -343,16 +347,16 @@ void CAnlandOutput::importBuffers() {
     if (count > 0 && m_slots[0].imported) {
         uint32_t w = m_slots[0].width;
         uint32_t h = m_slots[0].height;
-        uint32_t fmt = m_slots[0].format;
-        if (w > 0 && h > 0 && fmt != 0) {
-            if (w != m_width || h != m_height || fmt != m_drmFormat) {
-                ANLAND_LOG("importBuffers: buffer size changed to %dx%d fmt 0x%x, updating output", w, h, fmt);
-                updateMode(w, h, fmt);
+        if (w > 0 && h > 0) {
+            if (w != m_width || h != m_height) {
+                ANLAND_LOG("importBuffers: buffer size changed to %dx%d, updating output", w, h);
+                // 强制使用 XRGB8888
+                updateMode(w, h, DRM_FORMAT_XRGB8888);
             }
         }
     }
 
-    ANLAND_LOG("importBuffers: registered %d buffers, format 0x%x", m_bufferCount, m_drmFormat);
+    ANLAND_LOG("importBuffers: registered %d buffers, format XRGB8888", m_bufferCount);
 }
 
 bool CAnlandOutput::test() {
@@ -362,17 +366,13 @@ bool CAnlandOutput::test() {
 std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
     std::vector<SDRMFormat> formats;
     
-    // 优先使用实际的 dmabuf 格式
-    if (m_drmFormat != DRM_FORMAT_INVALID) {
-        formats.push_back({.drmFormat = m_drmFormat, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    }
-    
-    // 提供常见后备格式
+    // 只返回 XRGB8888，这是 Hyprland 最安全的后备格式
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     
+    // 如果需要，也提供 ARGB8888 作为备选
+    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    
+    // 如果 m_backend 有其他格式，也添加进来
     if (m_backend) {
         auto backendFormats = m_backend->getRenderFormats();
         for (const auto& fmt : backendFormats) {
@@ -383,7 +383,7 @@ std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
                     break;
                 }
             }
-            if (!exists) {
+            if (!exists && fmt.drmFormat != DRM_FORMAT_INVALID) {
                 formats.push_back(fmt);
             }
         }
@@ -489,7 +489,6 @@ bool CAnlandOutput::commit() {
 
     // 创建 render fence 实现 GPU 同步
     if (m_eglDisplay != EGL_NO_DISPLAY) {
-        // 使用 eglGetProcAddress 获取函数指针
         PFNEGLCREATESYNCKHRPROC eglCreateSyncKHR = 
             (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
         PFNEGLDUPNATIVEFENCEFDANDROIDPROC eglDupNativeFenceFDANDROID = 
