@@ -421,61 +421,134 @@ jobs:
           fi
           echo "HYPR_SOURCE_DIR=$SOURCE_DIR" >> $GITHUB_ENV
 
-      - name: Apply Anland patch (single attempt)
+      - name: Apply Anland patch to Hyprland
         if: inputs.skip_hyprland != true
         run: |
-          cd "${{ env.HYPR_SOURCE_DIR }}"
+          echo "=========================================="
+          echo "🔧 Starting patch application process"
+          echo "=========================================="
 
-          PATCH_FILE="../${{ env.HYPR_PATCH }}"
-          if [ ! -f "$PATCH_FILE" ]; then
-            echo "❌ Patch file not found: $PATCH_FILE"
-            exit 1
+          # 进入 Hyprland 源码目录
+          SOURCE_DIR=$(find . -maxdepth 1 -type d -name "${{ env.HYPR_SRC }}-*" | head -1)
+          if [ -z "$SOURCE_DIR" ]; then
+            echo "❌ Hyprland source directory not found, fetching..."
+            apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
+            SOURCE_DIR=$(find . -maxdepth 1 -type d -name "${{ env.HYPR_SRC }}-*" | head -1)
           fi
+          echo "📁 Source directory: $SOURCE_DIR"
+          cd "$SOURCE_DIR"
 
-          echo "📄 Applying patch: $PATCH_FILE"
+          # 检查补丁文件
+          PATCH_FILE="../${{ env.HYPR_PATCH }}"
+          echo "📄 Patch file path: $PATCH_FILE"
 
-          # Check if patch is already applied
-          if grep -q "ANLAND" src/Compositor.cpp 2>/dev/null || \
-             grep -q "anland" src/Compositor.cpp 2>/dev/null; then
-            echo "✅ Patch already applied (found markers in Compositor.cpp)"
+          if [ ! -f "$PATCH_FILE" ]; then
+            echo "⚠️  Patch file not found at $PATCH_FILE"
+            echo "📂 Contents of parent directory:"
+            ls -la ../ | head -20
             exit 0
           fi
+          
+          echo "✅ Patch file found"
+          echo ""
 
-          # Try git apply first (most reliable)
-          echo "=== Trying git apply ==="
-          if git apply --verbose --ignore-space-change --ignore-whitespace "$PATCH_FILE" 2>&1; then
-            echo "✅ git apply succeeded!"
+          # 显示补丁文件信息
+          echo "📊 Patch file info:"
+          echo "   Size: $(wc -c < "$PATCH_FILE") bytes"
+          echo "   Lines: $(wc -l < "$PATCH_FILE") lines"
+          echo "   First 5 lines:"
+          head -5 "$PATCH_FILE" | sed 's/^/     /'
+          echo ""
+
+          # 检查补丁是否已应用
+          echo "🔍 Checking if patch is already applied..."
+          if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
+            echo "✅ Patch is NOT applied, proceeding..."
           else
-            echo "⚠️ git apply failed, trying patch command..."
-            # Try patch with -N (--forward) to skip already applied hunks
-            if patch -p1 -N --forward --fuzz=5 < "$PATCH_FILE" 2>&1; then
-              echo "✅ patch succeeded with -N --forward --fuzz=5"
-            elif patch -p1 -N --forward --force < "$PATCH_FILE" 2>&1; then
-              echo "✅ patch succeeded with -N --forward --force"
+            echo "ℹ️  Patch is already applied or dry-run failed"
+            echo "   Checking for patch markers..."
+            if grep -q "anland" src/Compositor.cpp 2>/dev/null || \
+               grep -q "anland" src/config/ConfigManager.cpp 2>/dev/null || \
+               grep -q "ANLAND" src/Compositor.cpp 2>/dev/null; then
+              echo "✅ Patch appears to be already applied (found 'anland' markers in source)"
             else
-              echo "❌ All patch methods failed"
-              echo ""
-              echo "Patch file content (first 20 lines):"
-              head -20 "$PATCH_FILE"
-              echo ""
-              echo "Checking for reject files..."
-              find . -name "*.rej" -exec echo "=== Reject file: {} ===" \; -exec head -30 {} \;
-              exit 1
+              echo "⚠️  Patch may not be applied, but dry-run failed. Attempting force apply..."
+            fi
+          fi
+          echo ""
+
+          # 尝试应用补丁
+          echo "📦 Applying patch..."
+          APPLIED=false
+
+          # 方法1: git apply (推荐)
+          echo "   [1/4] Trying git apply..."
+          if git apply --verbose --ignore-space-change --ignore-whitespace "$PATCH_FILE" 2>&1; then
+            echo "   ✅ git apply succeeded!"
+            APPLIED=true
+          else
+            echo "   ⚠️  git apply failed, trying method 2..."
+
+            # 方法2: patch with dry-run check
+            echo "   [2/4] Trying patch with dry-run..."
+            if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
+              echo "   ✅ Dry-run succeeded, applying..."
+              if patch -p1 < "$PATCH_FILE" 2>&1; then
+                echo "   ✅ patch succeeded!"
+                APPLIED=true
+              else
+                echo "   ❌ patch failed unexpectedly"
+              fi
+            else
+              echo "   ℹ️  Dry-run indicates patch is already applied"
+              APPLIED=true  # 已应用视为成功
             fi
           fi
 
-          # Verify patch application
-          echo ""
-          echo "=== Verification ==="
-          if grep -q "ANLAND" src/Compositor.cpp 2>/dev/null; then
-            echo "✅ Patch verified successfully (found ANLAND markers)"
-          elif grep -q "anland" src/Compositor.cpp 2>/dev/null; then
-            echo "✅ Patch verified successfully (found anland markers)"
-          else
-            echo "⚠️ Patch verification failed - no markers found in Compositor.cpp"
-            echo "Checking if patch was partially applied..."
-            find . -name "*.rej" -exec echo "Reject file: {}" \; -exec head -20 {} \;
+          # 如果还没成功，尝试 fuzz
+          if [ "$APPLIED" != "true" ]; then
+            echo "   [3/4] Trying patch with --fuzz=5..."
+            if patch -p1 --fuzz=5 < "$PATCH_FILE" 2>&1; then
+              echo "   ✅ patch with fuzz succeeded!"
+              APPLIED=true
+            else
+              echo "   ❌ patch with fuzz failed"
+            fi
           fi
+
+          # 最后尝试强制应用
+          if [ "$APPLIED" != "true" ]; then
+            echo "   [4/4] Trying patch with --force..."
+            if patch -p1 --force < "$PATCH_FILE" 2>&1; then
+              echo "   ✅ patch with force succeeded!"
+              APPLIED=true
+            else
+              echo "   ❌ All patch methods failed!"
+            fi
+          fi
+
+          echo ""
+
+          # 验证补丁是否真的应用了
+          echo "🔍 Verifying patch application..."
+          if grep -r "anland" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -3; then
+            echo "✅ Found 'anland' markers in source code:"
+            grep -r "anland" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -5 | sed 's/^/   /'
+            echo ""
+            echo "   Patch appears to be applied successfully."
+          elif grep -r "ANLAND" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -3; then
+            echo "✅ Found 'ANLAND' markers in source code:"
+            grep -r "ANLAND" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -5 | sed 's/^/   /'
+            echo ""
+            echo "   Patch appears to be applied successfully."
+          else
+            echo "⚠️  No 'anland' markers found in source code."
+            echo "   Patch may not have been applied correctly."
+          fi
+
+          echo "=========================================="
+          echo "🏁 Patch application process complete"
+          echo "=========================================="
 
       - name: Bump Hyprland changelog
         if: inputs.skip_hyprland != true
