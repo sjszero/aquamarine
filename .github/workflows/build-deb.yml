@@ -422,7 +422,7 @@ jobs:
           fi
           echo "HYPR_SOURCE_DIR=$SOURCE_DIR" >> $GITHUB_ENV
 
-      - name: Apply Anland patch
+      - name: Apply Anland patch (git apply)
         if: inputs.skip_hyprland != true
         run: |
           cd "${{ env.HYPR_SOURCE_DIR }}"
@@ -433,7 +433,7 @@ jobs:
             exit 1
           fi
 
-          echo "📄 Applying patch: $PATCH_FILE"
+          echo "📄 Applying patch using git apply: $PATCH_FILE"
 
           # Check if patch is already applied
           if grep -q "ANLAND" src/Compositor.cpp 2>/dev/null || \
@@ -442,26 +442,55 @@ jobs:
             exit 0
           fi
 
-          # Try patch application
-          if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
-            echo "✅ Dry-run successful, applying..."
-            patch -p1 < "$PATCH_FILE"
-          elif patch -p1 --fuzz=5 < "$PATCH_FILE" 2>/dev/null; then
-            echo "✅ Applied with fuzz=5"
-          elif patch -p1 --force < "$PATCH_FILE" 2>/dev/null; then
-            echo "✅ Applied with --force"
+          # Method 1: git apply (recommended, more robust)
+          echo "=== Method 1: git apply ==="
+          if git apply --verbose --ignore-space-change --ignore-whitespace "$PATCH_FILE" 2>&1; then
+            echo "✅ git apply succeeded!"
           else
-            echo "❌ All patch methods failed"
-            echo "Patch file content (first 20 lines):"
-            head -20 "$PATCH_FILE"
-            exit 1
+            echo "⚠️ git apply failed, trying method 2..."
+
+            # Method 2: git apply with --reject (apply what it can)
+            echo "=== Method 2: git apply --reject ==="
+            if git apply --verbose --reject --ignore-space-change --ignore-whitespace "$PATCH_FILE" 2>&1; then
+              echo "✅ git apply --reject succeeded!"
+            else
+              echo "⚠️ git apply --reject failed, trying method 3..."
+
+              # Method 3: patch command (fallback)
+              echo "=== Method 3: patch ==="
+              if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
+                echo "✅ Dry-run successful, applying..."
+                patch -p1 < "$PATCH_FILE"
+              elif patch -p1 --fuzz=5 < "$PATCH_FILE" 2>/dev/null; then
+                echo "✅ Applied with fuzz=5"
+              elif patch -p1 --force < "$PATCH_FILE" 2>/dev/null; then
+                echo "✅ Applied with --force"
+              else
+                echo "❌ All patch methods failed"
+                echo ""
+                echo "Patch file content (first 20 lines):"
+                head -20 "$PATCH_FILE"
+                echo ""
+                echo "Trying manual application of individual hunks..."
+                # Try to apply patch with low fuzz and show rejects
+                patch -p1 --fuzz=3 < "$PATCH_FILE" || true
+                find . -name "*.rej" -exec echo "Reject file: {}" \; -exec cat {} \;
+                exit 1
+              fi
+            fi
           fi
 
           # Verify patch application
+          echo ""
+          echo "=== Verification ==="
           if grep -q "ANLAND" src/Compositor.cpp 2>/dev/null; then
-            echo "✅ Patch verified successfully"
+            echo "✅ Patch verified successfully (found ANLAND markers)"
+          elif grep -q "anland" src/Compositor.cpp 2>/dev/null; then
+            echo "✅ Patch verified successfully (found anland markers)"
           else
-            echo "⚠️ Patch verification failed - no ANLAND markers found"
+            echo "⚠️ Patch verification failed - no markers found in Compositor.cpp"
+            echo "Checking for reject files..."
+            find . -name "*.rej" -exec echo "Reject file: {}" \; -exec head -20 {} \;
           fi
 
       - name: Bump Hyprland changelog
