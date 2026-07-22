@@ -296,7 +296,6 @@ jobs:
           # Print pkg-config info for debugging
           echo "=== pkg-config check ==="
           pkg-config --modversion libdisplay-info 2>/dev/null || echo "libdisplay-info not found via pkg-config"
-          pkg-config --cflags libdisplay-info 2>/dev/null || echo "libdisplay-info cflags not found"
 
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
@@ -422,7 +421,7 @@ jobs:
           fi
           echo "HYPR_SOURCE_DIR=$SOURCE_DIR" >> $GITHUB_ENV
 
-      - name: Apply Anland patch (git apply)
+      - name: Apply Anland patch (single attempt)
         if: inputs.skip_hyprland != true
         run: |
           cd "${{ env.HYPR_SOURCE_DIR }}"
@@ -433,7 +432,7 @@ jobs:
             exit 1
           fi
 
-          echo "📄 Applying patch using git apply: $PATCH_FILE"
+          echo "📄 Applying patch: $PATCH_FILE"
 
           # Check if patch is already applied
           if grep -q "ANLAND" src/Compositor.cpp 2>/dev/null || \
@@ -442,41 +441,26 @@ jobs:
             exit 0
           fi
 
-          # Method 1: git apply (recommended, more robust)
-          echo "=== Method 1: git apply ==="
+          # Try git apply first (most reliable)
+          echo "=== Trying git apply ==="
           if git apply --verbose --ignore-space-change --ignore-whitespace "$PATCH_FILE" 2>&1; then
             echo "✅ git apply succeeded!"
           else
-            echo "⚠️ git apply failed, trying method 2..."
-
-            # Method 2: git apply with --reject (apply what it can)
-            echo "=== Method 2: git apply --reject ==="
-            if git apply --verbose --reject --ignore-space-change --ignore-whitespace "$PATCH_FILE" 2>&1; then
-              echo "✅ git apply --reject succeeded!"
+            echo "⚠️ git apply failed, trying patch command..."
+            # Try patch with -N (--forward) to skip already applied hunks
+            if patch -p1 -N --forward --fuzz=5 < "$PATCH_FILE" 2>&1; then
+              echo "✅ patch succeeded with -N --forward --fuzz=5"
+            elif patch -p1 -N --forward --force < "$PATCH_FILE" 2>&1; then
+              echo "✅ patch succeeded with -N --forward --force"
             else
-              echo "⚠️ git apply --reject failed, trying method 3..."
-
-              # Method 3: patch command (fallback)
-              echo "=== Method 3: patch ==="
-              if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
-                echo "✅ Dry-run successful, applying..."
-                patch -p1 < "$PATCH_FILE"
-              elif patch -p1 --fuzz=5 < "$PATCH_FILE" 2>/dev/null; then
-                echo "✅ Applied with fuzz=5"
-              elif patch -p1 --force < "$PATCH_FILE" 2>/dev/null; then
-                echo "✅ Applied with --force"
-              else
-                echo "❌ All patch methods failed"
-                echo ""
-                echo "Patch file content (first 20 lines):"
-                head -20 "$PATCH_FILE"
-                echo ""
-                echo "Trying manual application of individual hunks..."
-                # Try to apply patch with low fuzz and show rejects
-                patch -p1 --fuzz=3 < "$PATCH_FILE" || true
-                find . -name "*.rej" -exec echo "Reject file: {}" \; -exec cat {} \;
-                exit 1
-              fi
+              echo "❌ All patch methods failed"
+              echo ""
+              echo "Patch file content (first 20 lines):"
+              head -20 "$PATCH_FILE"
+              echo ""
+              echo "Checking for reject files..."
+              find . -name "*.rej" -exec echo "=== Reject file: {} ===" \; -exec head -30 {} \;
+              exit 1
             fi
           fi
 
@@ -489,7 +473,7 @@ jobs:
             echo "✅ Patch verified successfully (found anland markers)"
           else
             echo "⚠️ Patch verification failed - no markers found in Compositor.cpp"
-            echo "Checking for reject files..."
+            echo "Checking if patch was partially applied..."
             find . -name "*.rej" -exec echo "Reject file: {}" \; -exec head -20 {} \;
           fi
 
