@@ -129,16 +129,35 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,6 +708,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,5 +708,28 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
 +            // Anland: 在 OpenGL 初始化后传递 EGL 上下文
 +            passEGLToAnlandBackend(m_aqBackend);
 +
++            // 为 Anland 输出设置默认 ImageDescription
++#ifdef HAS_ANLAND_BACKEND
++            if (m_aqBackend) {
++                for (auto const& impl : m_aqBackend->getImplementations()) {
++                    if (impl->type() == Aquamarine::AQ_BACKEND_ANLAND) {
++                        auto* anlandImpl = static_cast<Aquamarine::CAnlandBackend*>(impl.get());
++                        if (anlandImpl) {
++                            auto output = anlandImpl->getOutput();
++                            if (output) {
++                                // 设置默认 sRGB ImageDescription
++                                auto desc = NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{});
++                                output->setImageDescription(desc);
++                                Log::logger->log(Log::DEBUG, "Anland: ImageDescription set");
++                            }
++                        }
++                    }
++                }
++            }
++#endif
++
              Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
              g_pHyprCtl = makeUnique<CHyprCtl>();
- 
 @@ -1064,6 +1150,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {

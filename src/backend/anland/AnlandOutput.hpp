@@ -21,6 +21,7 @@ extern "C" {
 #include "display_producer.h"
 }
 
+// 前向声明 ImageDescription
 namespace NColorManagement {
     class CImageDescription;
     using PImageDescription = Hyprutils::Memory::CSharedPointer<CImageDescription>;
@@ -37,9 +38,9 @@ class CAnlandDmaBuffer;
 /**
  * Anland output implementation with:
  * - Incremental damage tracking (buffer-age)
- * - Dynamic format selection (8/10/FP16)
+ * - Dynamic format selection
  * - EGL fence synchronization
- * - Multi-buffer support (MAX_BUFS = 8)
+ * - Multi-buffer support
  */
 class CAnlandOutput : public IOutput {
 public:
@@ -63,7 +64,7 @@ public:
     virtual void setCursorVisible(bool visible) override {}
     virtual Hyprutils::Math::Vector2D cursorPlaneSize() override { return {-1, -1}; }
 
-    // Anland specific
+    // Anland 特有
     bool initialize(uint32_t width, uint32_t height, uint32_t refresh);
     void releaseBuffers();
     void updateRefreshRate(uint32_t refresh);
@@ -72,15 +73,23 @@ public:
     bool isInFallback() const { return m_inFallback; }
     void onBufferReady();
 
-    // For allocator
+    // 用于 CAnlandAllocator
     int getBufferCount() const { return m_bufferCount; }
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
     CSharedPointer<CBackend> getCBackend() const;
 
-    // EGL context (passed from Hyprland)
-    void setEGL(EGLDisplay dpy, EGLContext ctx) {
-        m_eglDisplay = dpy;
-        m_eglContext = ctx;
+    // EGL 上下文管理
+    void setEGL(EGLDisplay dpy, EGLContext ctx) { 
+        m_eglDisplay = dpy; 
+        m_eglContext = ctx; 
+    }
+
+    // ImageDescription 管理 - 修复崩溃的关键
+    void setImageDescription(NColorManagement::PImageDescription desc) { 
+        m_imageDescription = desc; 
+    }
+    NColorManagement::PImageDescription getImageDescription() const { 
+        return m_imageDescription; 
     }
 
     display_ctx* display();
@@ -95,7 +104,7 @@ private:
     void reconfigureSwapchain();
     void updateMode(uint32_t width, uint32_t height, uint32_t format);
 
-    // Buffer slot with accumulative damage (buffer-age)
+    // 损伤跟踪
     struct BufferSlot {
         int fd = -1;
         uint32_t width = 0, height = 0;
@@ -108,8 +117,6 @@ private:
         bool imported = false;
         bool inUse = false;
         bool hasDamage = true;
-
-        // Accumulative damage for buffer-age optimization
         Hyprutils::Math::CRegion accumDamage;
     };
 
@@ -132,12 +139,12 @@ private:
     uint32_t m_refresh = 60000;
     uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
 
-    // EGL context (passed from Hyprland's OpenGL renderer)
+    // EGL 上下文
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     EGLContext m_eglContext = EGL_NO_CONTEXT;
 
-    // Color management (placeholder)
-    void* m_imageDescription = nullptr;
+    // ImageDescription - 必须初始化以避免空指针崩溃
+    NColorManagement::PImageDescription m_imageDescription;
 
     mutable std::mutex m_bufferMutex;
     std::atomic<bool> m_destroying{false};

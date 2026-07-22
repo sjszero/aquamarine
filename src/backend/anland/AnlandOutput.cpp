@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cerrno>
 #include <chrono>
+#include <aquamarine/backend/Misc.hpp>
 
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
@@ -25,7 +26,7 @@ using Hyprutils::Math::CRegion;
 
 /**
  * Convert Android pixel format to DRM fourcc
- * Extended to support 10-bit and FP16 formats for Adreno 750
+ * Extended to support 10-bit and FP16 formats
  */
 static uint32_t protocol_format_to_drm(uint32_t fmt) {
     switch (fmt) {
@@ -44,6 +45,14 @@ static uint32_t protocol_format_to_drm(uint32_t fmt) {
     }
 }
 
+/**
+ * 创建默认的 ImageDescription (sRGB)
+ */
+static NColorManagement::PImageDescription createDefaultImageDescription() {
+    // 使用默认 sRGB 描述
+    return NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{});
+}
+
 CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     : m_backend(backend) {
     ANLAND_TRACE("CAnlandOutput constructor START");
@@ -55,6 +64,9 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     this->subpixel = AQ_SUBPIXEL_UNKNOWN;
     this->enabled = false;
     this->state = makeShared<COutputState>();
+
+    // 初始化 ImageDescription 以避免空指针崩溃
+    m_imageDescription = createDefaultImageDescription();
 
     for (int i = 0; i < MAX_BUFS; i++) {
         m_slots[i].imported = false;
@@ -86,7 +98,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     m_width = width;
     m_height = height;
     m_refresh = refresh > 0 ? refresh : 60000;
-    m_drmFormat = DRM_FORMAT_XRGB8888;  // Default, will be updated on buffer import
+    m_drmFormat = DRM_FORMAT_XRGB8888;
 
     this->physicalSize = Hyprutils::Math::Vector2D(
         static_cast<float>(width) / 96.0f,
@@ -111,7 +123,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setMode(mode);
     this->state->setFormat(m_drmFormat);
 
-    // Default gamma table
+    // 设置默认 Gamma
     std::vector<uint16_t> defaultGamma;
     defaultGamma.resize(256 * 3);
     for (int i = 0; i < 256; i++) {
@@ -121,6 +133,11 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
         defaultGamma[i * 3 + 2] = val;
     }
     this->state->setGammaLut(defaultGamma);
+
+    // 确保 ImageDescription 已初始化
+    if (!m_imageDescription) {
+        m_imageDescription = createDefaultImageDescription();
+    }
 
     m_outputReady = true;
     m_inFallback = true;
@@ -153,10 +170,6 @@ void CAnlandOutput::releaseBuffers() {
     ANLAND_TRACE("releaseBuffers END");
 }
 
-/**
- * Update output mode when buffer size or format changes
- * Handles dynamic format selection with fallback
- */
 void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format) {
     if (width == m_width && height == m_height && format == m_drmFormat)
         return;
@@ -164,7 +177,6 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format)
     ANLAND_LOG("updateMode: %dx%d fmt 0x%x -> %dx%d fmt 0x%x",
                m_width, m_height, m_drmFormat, width, height, format);
 
-    // Choose the best format: prefer 10-bit, then FP16, then 8-bit
     uint32_t chosenFormat = format;
     auto availableFormats = getRenderFormats();
 
@@ -177,7 +189,6 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format)
     }
 
     if (!formatSupported) {
-        // Fallback to XRGB8888 (most compatible)
         chosenFormat = DRM_FORMAT_XRGB8888;
         ANLAND_LOG("updateMode: format 0x%x not supported, falling back to XRGB8888", format);
     }
@@ -281,11 +292,8 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // Convert to DRM format with support for 10-bit and FP16
     uint32_t drmFormat = protocol_format_to_drm(info.format);
     uint64_t modifier = info.modifier;
-
-    // If modifier is 0, treat as invalid (implicit)
     if (modifier == 0) {
         modifier = DRM_FORMAT_MOD_INVALID;
     }
@@ -326,8 +334,6 @@ bool CAnlandOutput::importBuffer(int index) {
     slot->stride = info.stride;
     slot->imported = true;
     slot->inUse = false;
-
-    // Initialize damage to full buffer (first frame)
     slot->accumDamage = CRegion(0, 0, info.width, info.height);
     slot->hasDamage = true;
 
@@ -398,21 +404,14 @@ bool CAnlandOutput::test() {
 std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
     std::vector<SDRMFormat> formats;
 
-    // Return formats in priority order
-    // 10-bit first (supports HDR/WCG) - Adreno 750 supports these
     formats.push_back({.drmFormat = DRM_FORMAT_ABGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XBGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-
-    // FP16 (HDR with higher precision)
     formats.push_back({.drmFormat = DRM_FORMAT_ABGR16161616F, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-
-    // 8-bit fallback
     formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
 
-    // Add backend formats if available
     if (m_backend) {
         auto backendFormats = m_backend->getRenderFormats();
         for (const auto& fmt : backendFormats) {
@@ -432,18 +431,10 @@ std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
     return formats;
 }
 
-/**
- * commit() - Render frame with incremental damage tracking
- *
- * Uses buffer-age optimization: only submit damage that has changed
- * since the last time this buffer was used. This significantly reduces
- * GPU work for partially damaged frames.
- */
 bool CAnlandOutput::commit() {
     ANLAND_TRACE("commit START: shouldTriggerRefresh=%d", m_shouldTriggerRefresh);
     if (m_destroying) return true;
 
-    // Bind EGL context (received from Hyprland via setEGL)
     if (m_eglDisplay != EGL_NO_DISPLAY && m_eglContext != EGL_NO_CONTEXT) {
         EGLContext current = eglGetCurrentContext();
         if (current != m_eglContext) {
@@ -526,26 +517,21 @@ bool CAnlandOutput::commit() {
     if (slot.buffer) {
         state->setBuffer(slot.buffer);
 
-        // Only submit damage that has changed since last use of this buffer
         if (slot.hasDamage && !slot.accumDamage.empty()) {
             state->addDamage(slot.accumDamage);
-            ANLAND_DEBUG("commit: using buffer %d with accumulated damage",
-                         m_selectedIndex);
+            ANLAND_DEBUG("commit: using buffer %d with accumulated damage", m_selectedIndex);
         } else {
-            // No new damage for this buffer
             ANLAND_DEBUG("commit: buffer %d has no new damage", m_selectedIndex);
         }
 
-        // Clear accumulated damage after submission
         slot.accumDamage = CRegion();
         slot.hasDamage = false;
     } else {
         ANLAND_ERR("commit: slot %d has no buffer", m_selectedIndex);
-        // Fallback: full damage
         state->addDamage(CRegion(0, 0, m_width, m_height));
     }
 
-    // Create render fence for GPU sync (EGL_ANDROID_native_fence_sync)
+    // 创建 render fence
     if (m_eglDisplay != EGL_NO_DISPLAY) {
         PFNEGLCREATESYNCKHRPROC eglCreateSyncKHR =
             (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
@@ -561,15 +547,9 @@ bool CAnlandOutput::commit() {
                 if (fenceFd >= 0) {
                     set_render_fence(dpy, fenceFd);
                     ANLAND_DEBUG("commit: created render fence fd=%d", fenceFd);
-                } else {
-                    ANLAND_DEBUG("commit: failed to create render fence (dup failed)");
                 }
                 eglDestroySyncKHR(m_eglDisplay, sync);
-            } else {
-                ANLAND_DEBUG("commit: failed to create render fence (sync creation failed)");
             }
-        } else {
-            ANLAND_DEBUG("commit: EGL sync functions not available");
         }
     }
 
@@ -607,12 +587,6 @@ bool CAnlandOutput::commit() {
     return true;
 }
 
-/**
- * scheduleFrame() - Accumulate damage for the next frame
- *
- * When Hyprland schedules a frame, we accumulate the damage region
- * for the current buffer slot. This enables buffer-age optimization.
- */
 void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     ANLAND_TRACE("scheduleFrame: reason=%d", (int)reason);
     if (m_destroying) return;
@@ -631,7 +605,6 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
         reconfigureSwapchain();
     }
 
-    // Get current buffer slot and accumulate damage
     if (m_buffersImported && m_selectedIndex < m_bufferCount) {
         auto& slot = m_slots[m_selectedIndex];
         if (slot.imported && slot.buffer) {
@@ -639,8 +612,7 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
             if (!damage.empty()) {
                 slot.accumDamage.add(damage);
                 slot.hasDamage = true;
-                ANLAND_TRACE("scheduleFrame: accumulated damage for buffer %d",
-                             m_selectedIndex);
+                ANLAND_TRACE("scheduleFrame: accumulated damage for buffer %d", m_selectedIndex);
             }
         }
     }
@@ -764,6 +736,11 @@ void CAnlandOutput::exitFallback() {
     m_buffersImported = false;
     m_shouldTriggerRefresh = false;
     this->swapchain.reset();
+
+    // 确保 ImageDescription 有效
+    if (!m_imageDescription) {
+        m_imageDescription = createDefaultImageDescription();
+    }
 
     importBuffers();
     reconfigureSwapchain();
