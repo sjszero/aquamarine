@@ -327,9 +327,10 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  
      m_zoomAnimProgress->setValueAndWarp(0.F);
      m_zoomAnimFrameCounter = 0;
-@@ -460,5 +483,14 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+@@ -460,5 +483,15 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
          default: UNREACHABLE();
      }
++
 +    // Anland: 强制保证 ImageDescription 非空，且为 sRGB
 +    if (isAnlandBackend(m_output)) {
 +        Log::logger->log(Log::DEBUG, "Anland: overriding ImageDescription to sRGB");
@@ -358,7 +359,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force) {
  
      static auto PDISABLESCALECHECKS = CConfigValue<Config::INTEGER>("debug:disable_scale_checks");
-@@ -510,6 +551,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -510,6 +549,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
  
      const bool sameDrmMode = !std::memcmp(&m_customDrmMode, &RULE->m_drmMode, sizeof(m_customDrmMode));
  
@@ -371,15 +372,15 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -686,9 +733,23 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
-         }
+@@ -686,9 +731,26 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
      };
      // clang-format on
--
+ 
      bool set10bit = false;
  
 +    // Anland: 强制优先使用 ABGR8888，匹配 dmabuf 格式
 +    if (isAnlandBackend(m_output)) {
++        // 先测试 ABGR8888
 +        uint32_t anlandFormat = DRM_FORMAT_ABGR8888;
 +        m_output->state->setFormat(anlandFormat);
 +        m_prevDrmFormat = m_drmFormat;
@@ -393,10 +394,12 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +        Log::logger->log(Log::WARN, "Anland: ABGR8888 test failed, falling back to standard format selection");
 +    }
 +
++    // 标准格式选择循环
      for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
          m_output->state->setFormat(fmt.second);
          m_prevDrmFormat = m_drmFormat;
-@@ -701,7 +760,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+         m_drmFormat     = fmt.second;
+@@ -701,7 +763,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
