@@ -117,16 +117,31 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,6 +698,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,5 +691,24 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
-+            // Anland: 在 OpenGL 初始化后传递 EGL 上下文
++            // Anland: 在 OpenGL 初始化后传递 EGL 上下文并注册回调
 +            passEGLToAnlandBackend(m_aqBackend);
++
++            // 注册 Anland 剪贴板和文本输入回调
++#ifdef HAS_ANLAND_BACKEND
++            if (m_aqBackend) {
++                for (auto const& impl : m_aqBackend->getImplementations()) {
++                    if (impl->type() == Aquamarine::AQ_BACKEND_ANLAND) {
++                        auto* anlandImpl = static_cast<Aquamarine::CAnlandBackend*>(impl.get());
++                        if (anlandImpl) {
++                            anlandImpl->setClipboardCallback([](const std::string& text) {
++                                g_pSeatManager->setCurrentSelection(...);
++                            });
++                        }
++                    }
++                }
++            }
++#endif
 +
              Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
              g_pHyprCtl = makeUnique<CHyprCtl>();
- 
 @@ -1064,6 +1140,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {

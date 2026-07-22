@@ -11,6 +11,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <xf86drm.h>
+#include <functional>
 
 extern "C" {
 #include "display_producer.h"
@@ -29,6 +30,18 @@ class CAnlandKeyboard;
 class CAnlandTouch;
 
 /**
+ * 剪贴板回调类型 - 由 Hyprland 端注册
+ * @param text UTF-8 编码的剪贴板文本
+ */
+using ClipboardCallback = std::function<void(const std::string& text)>;
+
+/**
+ * 文本输入回调类型 - 由 Hyprland 端注册
+ * @param text UTF-8 编码的输入文本
+ */
+using TextInputCallback = std::function<void(const std::string& text)>;
+
+/**
  * Anland backend for Hyprland (Aquamarine)
  *
  * Connects to Android display daemon via UNIX socket and provides:
@@ -36,12 +49,6 @@ class CAnlandTouch;
  * - Input events (pointer, keyboard, touch)
  * - Audio (PipeWire virtual devices)
  * - Camera (PipeWire virtual devices)
- *
- * Key features:
- * - Incremental damage tracking (buffer-age)
- * - Dynamic format selection (8-bit/10-bit/FP16)
- * - Modifier support for compressed textures
- * - Proper clipboard and text input injection
  */
 class CAnlandBackend : public IBackendImplementation {
 public:
@@ -76,6 +83,10 @@ public:
     void onFallback();
     void enterFallback();
     void shutdown();
+
+    // 注册回调函数（由 Hyprland 端调用）
+    void setClipboardCallback(ClipboardCallback cb) { m_clipboardCallback = std::move(cb); }
+    void setTextInputCallback(TextInputCallback cb) { m_textInputCallback = std::move(cb); }
 
     CWeakPointer<CAnlandBackend> self;
 
@@ -124,7 +135,11 @@ private:
     std::atomic<bool> m_destroying{false};
     std::atomic<bool> m_shutdownDone{false};
 
-    // Clipboard deduplication
+    // 回调函数 - 由 Hyprland 端注册
+    ClipboardCallback m_clipboardCallback;
+    TextInputCallback m_textInputCallback;
+
+    // 剪贴板去重
     std::string m_lastClipboardText;
 };
 

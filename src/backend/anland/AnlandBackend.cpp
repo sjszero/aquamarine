@@ -11,14 +11,6 @@
 #include <chrono>
 #include <xf86drm.h>
 
-// Hyprland includes for clipboard/text input
-#include <managers/SeatManager.hpp>
-#include <managers/input/InputManager.hpp>
-#include <managers/input/InputMethodRelay.hpp>
-#include <protocols/TextInputV3.hpp>
-#include <protocols/types/DataDevice.hpp>
-#include <Compositor.hpp>
-
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
@@ -450,10 +442,10 @@ void CAnlandBackend::updateCameraResources() {
 }
 
 /**
- * updateClipboard() - Inject clipboard data into Hyprland
+ * updateClipboard() - 通过回调注入剪贴板数据
  *
- * Reads text from Android consumer and sets it as Hyprland's current selection.
- * Uses deduplication to avoid feedback loops.
+ * 如果注册了剪贴板回调，则调用它。Hyprland 端通过 setClipboardCallback()
+ * 注册回调函数，将文本注入 SeatManager。
  */
 void CAnlandBackend::updateClipboard(const InputEvent& ev) {
     if (m_inFallback || !m_display) return;
@@ -469,7 +461,7 @@ void CAnlandBackend::updateClipboard(const InputEvent& ev) {
 
     std::string text(reinterpret_cast<char*>(data.data()), size);
 
-    // Deduplicate: skip if same as last known text
+    // 去重：如果文本相同则跳过
     if (text == m_lastClipboardText) {
         ANLAND_TRACE("updateClipboard: text unchanged, skipping");
         return;
@@ -478,59 +470,20 @@ void CAnlandBackend::updateClipboard(const InputEvent& ev) {
 
     ANLAND_LOG("updateClipboard: received %zu bytes", text.size());
 
-    // Inject into Hyprland's seat manager
-    if (!g_pSeatManager) {
-        ANLAND_ERR("updateClipboard: g_pSeatManager is null");
-        return;
+    // 通过回调注入到 Hyprland
+    if (m_clipboardCallback) {
+        m_clipboardCallback(text);
+        ANLAND_LOG("updateClipboard: callback invoked");
+    } else {
+        ANLAND_LOG("updateClipboard: no callback registered, text dropped");
     }
-
-    // Create a data source with the text
-    class AnlandClipboardSource : public IDataSource {
-    public:
-        explicit AnlandClipboardSource(const std::string& text) : m_text(text) {}
-
-        virtual std::vector<std::string> mimes() override {
-            return {"text/plain;charset=utf-8", "text/plain"};
-        }
-
-        virtual void send(const std::string& mime, Hyprutils::OS::CFileDescriptor fd) override {
-            if (mime.find("plain") == std::string::npos) return;
-            const char* data = m_text.c_str();
-            size_t remaining = m_text.size();
-            while (remaining > 0) {
-                ssize_t n = write(fd.get(), data, remaining);
-                if (n <= 0) break;
-                data += n;
-                remaining -= n;
-            }
-        }
-
-        virtual void accepted(const std::string& mime) override {}
-        virtual void cancelled() override {}
-        virtual bool hasDnd() override { return false; }
-        virtual bool dndDone() override { return true; }
-        virtual void error(uint32_t code, const std::string& msg) override {}
-        virtual void sendDndFinished() override {}
-        virtual uint32_t actions() override { return 0; }
-        virtual eDataSourceType type() override { return DATA_SOURCE_TYPE_WAYLAND; }
-        virtual void sendDndDropPerformed() override {}
-        virtual void sendDndAction(wl_data_device_manager_dnd_action a) override {}
-
-    private:
-        std::string m_text;
-    };
-
-    auto source = makeShared<AnlandClipboardSource>(text);
-    g_pSeatManager->setCurrentSelection(source);
-    ANLAND_LOG("updateClipboard: selection set in Hyprland");
 }
 
 /**
- * updateTextInput() - Inject text input into Hyprland's IME system
+ * updateTextInput() - 通过回调注入文本输入
  *
- * Reads committed text from Android keyboard and injects it into Hyprland's
- * input method relay, which delivers to focused client via text-input-v3
- * or synthesized key events.
+ * 如果注册了文本输入回调，则调用它。Hyprland 端通过 setTextInputCallback()
+ * 注册回调函数，将文本注入 InputMethodRelay。
  */
 void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     if (m_inFallback || !m_display) return;
@@ -547,25 +500,12 @@ void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     std::string text(reinterpret_cast<char*>(data.data()), size);
     ANLAND_LOG("updateTextInput: received text: %s", text.c_str());
 
-    // Inject into Hyprland's input method relay
-    if (!g_pInputManager) {
-        ANLAND_ERR("updateTextInput: g_pInputManager is null");
-        return;
-    }
-
-    auto& relay = g_pInputManager->m_relay;
-    auto focused = relay.getFocusedTextInput();
-
-    if (focused) {
-        // TextInputV3 path - commit text to focused text-input client
-        QString qstr = QString::fromUtf8(text.c_str(), text.size());
-        focused->commitText(qstr);
-        ANLAND_LOG("updateTextInput: committed via TextInputV3");
+    // 通过回调注入到 Hyprland
+    if (m_textInputCallback) {
+        m_textInputCallback(text);
+        ANLAND_LOG("updateTextInput: callback invoked");
     } else {
-        // Fallback: use the input method relay's commit function
-        // This synthesizes key events if no text-input client is focused
-        relay.commitText(text);
-        ANLAND_LOG("updateTextInput: committed via input method relay");
+        ANLAND_LOG("updateTextInput: no callback registered, text dropped");
     }
 }
 
@@ -585,10 +525,6 @@ std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-
-    // If we have modifier support, also advertise compressed formats
-    // These will be discovered via EGL_EXT_image_dma_buf_import_modifiers
-    // at runtime by the renderer
 
     return formats;
 }
