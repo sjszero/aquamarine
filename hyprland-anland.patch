@@ -343,23 +343,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      if ((minLuminance() >= 0 || maxLuminance() > 0) && (cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID))
          m_imageDescription = m_imageDescription->with({
              .min       = minLuminance() >= 0 ? minLuminance() : m_imageDescription->value().luminances.min, //
-@@ -472,6 +504,15 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
-     }
- }
- 
-+PImageDescription CMonitor::workBufferImageDescription() {
-+    // Anland: 如果 imageDescription 为空，返回默认 sRGB
-+    if (isAnlandBackend(m_output) && !m_imageDescription) {
-+        m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
-+        m_blurFBDirty = true;
-+    }
-+    return m_cachedInternalDescription ? m_cachedInternalDescription : m_imageDescription;
-+}
-+
- bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force) {
- 
-     static auto PDISABLESCALECHECKS = CConfigValue<Config::INTEGER>("debug:disable_scale_checks");
-@@ -510,6 +549,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -510,6 +542,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
  
      const bool sameDrmMode = !std::memcmp(&m_customDrmMode, &RULE->m_drmMode, sizeof(m_customDrmMode));
  
@@ -372,7 +356,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -686,9 +731,26 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -686,9 +724,26 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
      };
      // clang-format on
  
@@ -399,7 +383,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
          m_output->state->setFormat(fmt.second);
          m_prevDrmFormat = m_drmFormat;
          m_drmFormat     = fmt.second;
-@@ -701,7 +763,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -701,7 +756,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
@@ -408,3 +392,18 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      m_enabled10bit = set10bit;
  
      m_supportsWideColor = RULE->m_supportsWideColor;
+@@ -2663,7 +2720,14 @@ bool CMonitor::useFP16() {
+ 
+ PImageDescription CMonitor::workBufferImageDescription() {
+     static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
+ 
++    // Anland: 如果 imageDescription 为空，返回默认 sRGB
++    if (isAnlandBackend(m_output) && !m_imageDescription) {
++        m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
++        m_blurFBDirty = true;
++        return m_imageDescription;
++    }
++
+     if (!useFP16() && !m_imageDescription->value().icc.present)
+         return m_imageDescription;
+ 
