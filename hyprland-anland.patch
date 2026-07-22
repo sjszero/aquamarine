@@ -68,7 +68,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      m_aqBackend = CBackend::create(implementations, options);
  
-@@ -562,6 +595,60 @@ void CCompositor::initAllSignals() {
+@@ -562,6 +595,48 @@ void CCompositor::initAllSignals() {
          });
      }
  }
@@ -106,19 +106,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +                Log::logger->log(Log::WARN, "Anland: Explicit sync NOT supported, falling back to implicit sync");
 +            }
 +
-+            // 注册剪贴板回调
-+            anlandImpl->setClipboardCallback([](const std::string& text) {
-+                // TODO: 注入到 Hyprland 的 SeatManager
-+                Log::logger->log(Log::DEBUG, "Anland clipboard callback: %zu bytes", text.size());
-+            });
-+
-+            // 注册文本输入回调
-+            anlandImpl->setTextInputCallback([](const std::string& text) {
-+                // TODO: 注入到 Hyprland 的 InputMethodRelay
-+                Log::logger->log(Log::DEBUG, "Anland text input callback: %zu bytes", text.size());
-+            });
-+
-+            Log::logger->log(Log::DEBUG, "Anland: EGL context and callbacks passed to Anland backend");
++            Log::logger->log(Log::DEBUG, "Anland: EGL context passed to Anland backend");
 +
 +            // 只需要传递给第一个 Anland 后端
 +            break;
@@ -129,35 +117,17 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,5 +625,27 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,6 +701,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
 +            // Anland: 在 OpenGL 初始化后传递 EGL 上下文
 +            passEGLToAnlandBackend(m_aqBackend);
 +
-+            // 为 Anland 输出设置默认 ImageDescription（使用 void* 避免类型依赖）
-+#ifdef HAS_ANLAND_BACKEND
-+            if (m_aqBackend) {
-+                for (auto const& impl : m_aqBackend->getImplementations()) {
-+                    if (impl->type() == Aquamarine::AQ_BACKEND_ANLAND) {
-+                        auto* anlandImpl = static_cast<Aquamarine::CAnlandBackend*>(impl.get());
-+                        if (anlandImpl) {
-+                            auto output = anlandImpl->getOutput();
-+                            if (output) {
-+                                // 设置默认 sRGB ImageDescription (使用默认的 sRGB 描述)
-+                                auto desc = NColorManagement::getDefaultImageDescription();
-+                                output->setImageDescription(desc.get());
-+                            }
-+                        }
-+                    }
-+                }
-+            }
-+#endif
-+
              Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
              g_pHyprCtl = makeUnique<CHyprCtl>();
-@@ -1064,6 +1150,13 @@ void CCompositor::createLockFile() {
+ 
+@@ -1064,6 +1143,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {
      const auto PATH = m_instancePath + "/hyprland.lock";
@@ -171,7 +141,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      if (std::filesystem::exists(PATH))
          std::filesystem::remove(PATH);
-@@ -1092,6 +1185,10 @@ void CCompositor::cleanup() {
+@@ -1092,6 +1178,10 @@ void CCompositor::cleanup() {
  
      m_isShuttingDown = true;
  
@@ -284,3 +254,25 @@ diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
          std::map<PHLMONITORREF, SP<IFramebuffer>> m_monitorBGFBs;
  
          struct {
+diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
+--- a/src/helpers/Monitor.cpp
++++ b/src/helpers/Monitor.cpp
+@@ -465,6 +465,18 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+         default: UNREACHABLE();
+     }
++    // 对于 Anland 后端，如果描述仍然为空，强制设置为 sRGB
++    if (!m_imageDescription) {
++        Log::logger->log(Log::WARN, "CMonitor: imageDescription is null, forcing sRGB for Anland compatibility");
++        m_imageDescription = NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{
++            .transferFunction = NColorManagement::CM_TRANSFER_FUNCTION_SRGB,
++            .primariesNamed   = NColorManagement::CM_PRIMARIES_SRGB,
++            .primaries        = NColorManagement::getPrimaries(NColorManagement::CM_PRIMARIES_SRGB)
++        });
++        if (!m_imageDescription)
++            Log::logger->log(Log::ERR, "CMonitor: Failed to create fallback sRGB image description!");
++    }
++
+     if ((minLuminance() >= 0 || maxLuminance() > 0) && (cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID))
+         m_imageDescription = m_imageDescription->with({
+             .min       = minLuminance() >= 0 ? minLuminance() : m_imageDescription->value().luminances.min, //
+             .max       = maxLuminance() > 0 ? maxLuminance() : m_imageDescription->value().luminances.max,  //
