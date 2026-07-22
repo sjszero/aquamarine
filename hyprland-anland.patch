@@ -290,7 +290,7 @@ diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
 diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 --- a/src/helpers/Monitor.cpp
 +++ b/src/helpers/Monitor.cpp
-@@ -227,7 +227,17 @@ CMonitor::CMonitor(SP<Aquamarine::IOutput> output_) : m_state(this), m_output(output_), m_imageDescription(getDefaultImageDescription()) {
+@@ -227,6 +227,16 @@ CMonitor::CMonitor(SP<Aquamarine::IOutput> output_) : m_state(this), m_output(output_), m_imageDescription(getDefaultImageDescription()) {
      m_dpmsBlackOpacity->setUpdateCallback([this](auto) { g_pHyprRenderer->damageMonitor(m_self.lock()); });
  }
  
@@ -300,14 +300,13 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +    auto backend = output->getBackend();
 +    if (!backend)
 +        return false;
-+    return backend->type() == Aquamarine::AQ_BACKEND_ANLAND;
++    // 使用类型检查，如果 AQ_BACKEND_ANLAND 未定义则回退到环境变量检测
++    return getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0;
 +}
 +
  CMonitor::~CMonitor() {
-+    // ... existing code ...
      m_events.destroy.emit();
      if (g_pHyprRenderer && g_pHyprRenderer->glBackend())
-         g_pHyprRenderer->glBackend()->destroyMonitorResources(m_self);
 @@ -236,6 +246,19 @@ CMonitor::~CMonitor() {
  void CMonitor::onConnect(bool noRule) {
      Event::bus()->m_events.monitor.preAdded.emit(m_self.lock());
@@ -328,7 +327,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  
      m_zoomAnimProgress->setValueAndWarp(0.F);
      m_zoomAnimFrameCounter = 0;
-@@ -460,6 +483,14 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+@@ -460,6 +483,15 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
              case NCMType::CM_HDR_EDID: m_cmType = supportsHDR() ? m_cmType : NCMType::CM_SRGB; break;
              default: break;
          }
@@ -339,6 +338,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +        m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
 +        m_cachedInternalDescription = m_imageDescription;
 +        m_blurFBDirty = true;
++        return;
 +    }
 +
          m_sdrEotf = RULE->m_sdrEotf;
@@ -353,7 +353,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +        m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
 +        m_blurFBDirty = true;
 +    }
-+    // ... existing code ...
++    // 原有逻辑...
 +    return m_cachedInternalDescription ? m_cachedInternalDescription : m_imageDescription;
 +}
 +
@@ -373,7 +373,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -686,6 +735,14 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -686,6 +735,13 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
          }
      };
      // clang-format on
@@ -385,20 +385,5 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +                DRM_FORMAT_ABGR8888, DRM_FORMAT_XBGR8888, DRM_FORMAT_ARGB8888, DRM_FORMAT_XRGB8888
 +            };
 +            // 修改循环逻辑，优先使用 ABGR8888
-+
      bool set10bit = false;
- 
-diff --git a/src/helpers/Monitor.hpp b/src/helpers/Monitor.hpp
---- a/src/helpers/Monitor.hpp
-+++ b/src/helpers/Monitor.hpp
-@@ -377,6 +377,9 @@ class CMonitor {
-     bool                                m_noShaderCTM      = false; // sets drm CTM, restore needed
- 
-     bool                                m_blurFBDirty        = true;
-     bool                                m_blurFBShouldRender = false;
-+
-+    // 检查是否为 Anland 后端
-+    bool isAnland() const { return m_output && m_output->getBackend() && m_output->getBackend()->type() == Aquamarine::AQ_BACKEND_ANLAND; }
- 
-     // For the list lookup
  
