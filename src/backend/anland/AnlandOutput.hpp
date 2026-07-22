@@ -12,6 +12,7 @@
 #include <atomic>
 #include <mutex>
 #include <vector>
+#include <memory>
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl32.h>
@@ -21,11 +22,8 @@ extern "C" {
 #include "display_producer.h"
 }
 
-// 前向声明 ImageDescription
-namespace NColorManagement {
-    class CImageDescription;
-    using PImageDescription = Hyprutils::Memory::CSharedPointer<CImageDescription>;
-}
+// 不再依赖 Hyprland 的颜色管理
+// 使用简单的 void* 来存储描述，避免类型依赖
 
 namespace Aquamarine {
 
@@ -84,13 +82,10 @@ public:
         m_eglContext = ctx; 
     }
 
-    // ImageDescription 管理 - 修复崩溃的关键
-    void setImageDescription(NColorManagement::PImageDescription desc) { 
-        m_imageDescription = desc; 
-    }
-    NColorManagement::PImageDescription getImageDescription() const { 
-        return m_imageDescription; 
-    }
+    // ImageDescription 管理 - 使用 void* 避免类型依赖
+    // 注意：这个指针由 Hyprland 管理，Anland 只存储和传递
+    void setImageDescription(void* desc) { m_imageDescription = desc; }
+    void* getImageDescription() const { return m_imageDescription; }
 
     display_ctx* display();
     uint32_t getWidth() const { return m_width; }
@@ -143,8 +138,9 @@ private:
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     EGLContext m_eglContext = EGL_NO_CONTEXT;
 
-    // ImageDescription - 必须初始化以避免空指针崩溃
-    NColorManagement::PImageDescription m_imageDescription;
+    // ImageDescription - 使用 void* 避免对 Hyprland 类型的依赖
+    // Hyprland 端通过 setImageDescription() 设置，Anland 只负责存储和传递
+    void* m_imageDescription = nullptr;
 
     mutable std::mutex m_bufferMutex;
     std::atomic<bool> m_destroying{false};

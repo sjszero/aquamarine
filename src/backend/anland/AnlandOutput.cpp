@@ -11,7 +11,6 @@
 #include <cstdio>
 #include <cerrno>
 #include <chrono>
-#include <aquamarine/backend/Misc.hpp>
 
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
@@ -45,14 +44,6 @@ static uint32_t protocol_format_to_drm(uint32_t fmt) {
     }
 }
 
-/**
- * 创建默认的 ImageDescription (sRGB)
- */
-static NColorManagement::PImageDescription createDefaultImageDescription() {
-    // 使用默认 sRGB 描述
-    return NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{});
-}
-
 CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     : m_backend(backend) {
     ANLAND_TRACE("CAnlandOutput constructor START");
@@ -65,8 +56,8 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
     this->enabled = false;
     this->state = makeShared<COutputState>();
 
-    // 初始化 ImageDescription 以避免空指针崩溃
-    m_imageDescription = createDefaultImageDescription();
+    // m_imageDescription 初始为 nullptr，由 Hyprland 端设置
+    m_imageDescription = nullptr;
 
     for (int i = 0; i < MAX_BUFS; i++) {
         m_slots[i].imported = false;
@@ -133,11 +124,6 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
         defaultGamma[i * 3 + 2] = val;
     }
     this->state->setGammaLut(defaultGamma);
-
-    // 确保 ImageDescription 已初始化
-    if (!m_imageDescription) {
-        m_imageDescription = createDefaultImageDescription();
-    }
 
     m_outputReady = true;
     m_inFallback = true;
@@ -736,11 +722,6 @@ void CAnlandOutput::exitFallback() {
     m_buffersImported = false;
     m_shouldTriggerRefresh = false;
     this->swapchain.reset();
-
-    // 确保 ImageDescription 有效
-    if (!m_imageDescription) {
-        m_imageDescription = createDefaultImageDescription();
-    }
 
     importBuffers();
     reconfigureSwapchain();

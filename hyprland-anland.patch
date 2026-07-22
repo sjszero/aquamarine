@@ -129,14 +129,14 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,5 +708,28 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,5 +625,27 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
 +            // Anland: 在 OpenGL 初始化后传递 EGL 上下文
 +            passEGLToAnlandBackend(m_aqBackend);
 +
-+            // 为 Anland 输出设置默认 ImageDescription
++            // 为 Anland 输出设置默认 ImageDescription（使用 void* 避免类型依赖）
 +#ifdef HAS_ANLAND_BACKEND
 +            if (m_aqBackend) {
 +                for (auto const& impl : m_aqBackend->getImplementations()) {
@@ -145,10 +145,9 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +                        if (anlandImpl) {
 +                            auto output = anlandImpl->getOutput();
 +                            if (output) {
-+                                // 设置默认 sRGB ImageDescription
-+                                auto desc = NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{});
-+                                output->setImageDescription(desc);
-+                                Log::logger->log(Log::DEBUG, "Anland: ImageDescription set");
++                                // 设置默认 sRGB ImageDescription (使用默认的 sRGB 描述)
++                                auto desc = NColorManagement::getDefaultImageDescription();
++                                output->setImageDescription(desc.get());
 +                            }
 +                        }
 +                    }
