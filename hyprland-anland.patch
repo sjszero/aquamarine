@@ -300,7 +300,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +    auto backend = output->getBackend();
 +    if (!backend)
 +        return false;
-+    // 使用环境变量检测 Anland 后端（因为 AQ_BACKEND_ANLAND 可能在旧版本中不存在）
++    // 使用环境变量检测 Anland 后端
 +    return getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0;
 +}
 +
@@ -327,10 +327,9 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  
      m_zoomAnimProgress->setValueAndWarp(0.F);
      m_zoomAnimFrameCounter = 0;
-@@ -460,5 +483,15 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+@@ -460,5 +483,14 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
          default: UNREACHABLE();
      }
-+
 +    // Anland: 强制保证 ImageDescription 非空，且为 sRGB
 +    if (isAnlandBackend(m_output)) {
 +        Log::logger->log(Log::DEBUG, "Anland: overriding ImageDescription to sRGB");
@@ -343,26 +342,23 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      if ((minLuminance() >= 0 || maxLuminance() > 0) && (cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID))
          m_imageDescription = m_imageDescription->with({
              .min       = minLuminance() >= 0 ? minLuminance() : m_imageDescription->value().luminances.min, //
-@@ -472,6 +504,18 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+@@ -472,6 +504,15 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
      }
  }
  
 +PImageDescription CMonitor::workBufferImageDescription() {
-+    // 如果当前是 Anland 后端且 imageDescription 为空，返回默认 sRGB
++    // Anland: 如果 imageDescription 为空，返回默认 sRGB
 +    if (isAnlandBackend(m_output) && !m_imageDescription) {
 +        m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
 +        m_blurFBDirty = true;
 +    }
-+    // 原有逻辑：m_cachedInternalDescription 在 applyCMType 中设置
-+    // 注意：这里需要调用父类或原有实现，但由于我们没有修改原有逻辑，
-+    // 直接返回 m_cachedInternalDescription 或 m_imageDescription
 +    return m_cachedInternalDescription ? m_cachedInternalDescription : m_imageDescription;
 +}
 +
  bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force) {
  
      static auto PDISABLESCALECHECKS = CConfigValue<Config::INTEGER>("debug:disable_scale_checks");
-@@ -510,6 +553,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -510,6 +551,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
  
      const bool sameDrmMode = !std::memcmp(&m_customDrmMode, &RULE->m_drmMode, sizeof(m_customDrmMode));
  
@@ -375,32 +371,32 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -688,6 +737,24 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -686,9 +733,23 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+         }
      };
      // clang-format on
+-
+     bool set10bit = false;
  
 +    // Anland: 强制优先使用 ABGR8888，匹配 dmabuf 格式
 +    if (isAnlandBackend(m_output)) {
-+        // 修改循环逻辑，优先使用 ABGR8888
-+        // 直接设置 format 为 ABGR8888 并测试
 +        uint32_t anlandFormat = DRM_FORMAT_ABGR8888;
 +        m_output->state->setFormat(anlandFormat);
 +        m_prevDrmFormat = m_drmFormat;
 +        m_drmFormat     = anlandFormat;
 +
-+        if (!m_state.test()) {
-+            Log::logger->log(Log::WARN, "Anland: ABGR8888 test failed, falling back to XRGB8888");
-+            m_drmFormat = DRM_FORMAT_XRGB8888;
-+            m_output->state->setFormat(m_drmFormat);
-+        } else {
++        if (m_state.test()) {
 +            Log::logger->log(Log::DEBUG, "Anland: Using ABGR8888 format");
++            set10bit = false;
++            goto after_format_selection;
 +        }
-+        goto after_format_selection;
++        Log::logger->log(Log::WARN, "Anland: ABGR8888 test failed, falling back to standard format selection");
 +    }
-     bool set10bit = false;
- 
++
      for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
-@@ -701,6 +768,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+         m_output->state->setFormat(fmt.second);
+         m_prevDrmFormat = m_drmFormat;
+@@ -701,7 +760,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
@@ -408,3 +404,4 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +after_format_selection:
      m_enabled10bit = set10bit;
  
+     m_supportsWideColor = RULE->m_supportsWideColor;
