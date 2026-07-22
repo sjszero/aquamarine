@@ -328,11 +328,11 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  
      m_zoomAnimProgress->setValueAndWarp(0.F);
      m_zoomAnimFrameCounter = 0;
-@@ -460,6 +483,15 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
-         case NCMType::CM_HDR_EDID:
-         default: UNREACHABLE();
-     }
-+
+@@ -460,6 +483,14 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+             case NCMType::CM_HDR_EDID: m_cmType = supportsHDR() ? m_cmType : NCMType::CM_SRGB; break;
+             default: break;
+         }
+ 
 +    // Anland: 强制保证 ImageDescription 非空，且为 sRGB
 +    if (isAnlandBackend(m_output)) {
 +        Log::logger->log(Log::DEBUG, "Anland: overriding ImageDescription to sRGB");
@@ -341,10 +341,9 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +        m_blurFBDirty = true;
 +    }
 +
-     if ((minLuminance() >= 0 || maxLuminance() > 0) && (cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID))
-         m_imageDescription = m_imageDescription->with({
-             .min       = minLuminance() >= 0 ? minLuminance() : m_imageDescription->value().luminances.min, //
-@@ -472,6 +504,17 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+         m_sdrEotf = RULE->m_sdrEotf;
+ 
+@@ -472,6 +504,16 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
      }
  }
  
@@ -376,9 +375,9 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  
 @@ -686,6 +735,14 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
          }
-     } else {
-         // clang-format on
-+
+     };
+     // clang-format on
+ 
 +        // Anland: 强制优先使用 ABGR8888，匹配 dmabuf 格式
 +        if (isAnlandBackend(m_output)) {
 +            // 先测试 ABGR8888
@@ -386,9 +385,9 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +                DRM_FORMAT_ABGR8888, DRM_FORMAT_XBGR8888, DRM_FORMAT_ARGB8888, DRM_FORMAT_XRGB8888
 +            };
 +            // 修改循环逻辑，优先使用 ABGR8888
-             for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
-                 m_output->state->setFormat(fmt.second);
-                 m_prevDrmFormat = m_drmFormat;
++
+     bool set10bit = false;
+ 
 diff --git a/src/helpers/Monitor.hpp b/src/helpers/Monitor.hpp
 --- a/src/helpers/Monitor.hpp
 +++ b/src/helpers/Monitor.hpp
