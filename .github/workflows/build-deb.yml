@@ -32,6 +32,7 @@ env:
   DEBIAN_FRONTEND: noninteractive
   HYPR_SRC: hyprland
   HYPR_PATCH: hyprland-anland.patch
+  AQUAMARINE_VERSION: 0.11.0
 
 jobs:
   build:
@@ -41,19 +42,20 @@ jobs:
       options: --privileged --user root
 
     steps:
-      - name: Setup sources
+      # ==========================================================
+      # 1. 基础环境设置
+      # ==========================================================
+      - name: Setup APT sources
         run: |
           cat > /etc/apt/sources.list << 'EOF'
           deb http://deb.debian.org/debian trixie main
           deb http://deb.debian.org/debian trixie-updates main
           deb http://deb.debian.org/debian-security trixie-security main
           deb http://deb.debian.org/debian trixie-backports main
-          deb http://deb.debian.org/debian sid main
           deb-src http://deb.debian.org/debian trixie main
           deb-src http://deb.debian.org/debian trixie-updates main
           deb-src http://deb.debian.org/debian-security trixie-security main
           deb-src http://deb.debian.org/debian trixie-backports main
-          deb-src http://deb.debian.org/debian sid main
           EOF
           rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
           cat > /etc/apt/apt.conf.d/99backports << 'EOF'
@@ -63,32 +65,49 @@ jobs:
 
       - name: Generate APT package list hash
         id: apt-hash
-        shell: bash
         run: |
           cat > /tmp/apt-packages.txt << 'EOF'
+          # Build essentials
           devscripts build-essential fakeroot dpkg-dev quilt debhelper-compat
           cmake pkg-config git wget curl ca-certificates gnupg xxd
-          libgles-dev libegl-dev libgl-dev libgl1-mesa-dev libegl1-mesa-dev
-          libgles2-mesa-dev mesa-common-dev
+
+          # OpenGL/EGL
+          libgles-dev libegl-dev libgl-dev libgl1-mesa-dev
+          libegl1-mesa-dev libgles2-mesa-dev mesa-common-dev
+
+          # Wayland
           libwayland-dev wayland-protocols
+
+          # Input/Seat
           libseat-dev libinput-dev libudev-dev
+
+          # DRM/GBM
           libdrm-dev libgbm-dev
+
+          # X11/XCB (for XWayland)
           libxkbcommon-dev
           libxcb1-dev libxcb-render0-dev libxcb-xfixes0-dev
           libxcb-icccm4-dev libxcb-composite0-dev libxcb-res0-dev
           libxcb-errors-dev libxrender-dev libxcomposite-dev
           libxfixes-dev libxext-dev libxcursor-dev
+
+          # Graphics
           libpixman-1-dev libcairo2-dev libpango1.0-dev libpangocairo-1.0-0
+
+          # Hypr ecosystem
           libhyprutils-dev libhyprlang-dev libhyprcursor-dev libhyprgraphics-dev
+
+          # Utilities
           libpugixml-dev libtomlplusplus-dev
           uuid-dev libsystemd-dev
           libre2-dev libmuparser-dev liblcms2-dev
           liblua5.4-dev
           hwdata
-          libpipewire-0.3-dev libspa-0.2-dev
+
+          # Shader compilation
+          glslang-dev glslang-tools
           EOF
-          PACKAGE_HASH=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)
-          echo "package_hash=${PACKAGE_HASH}" >> $GITHUB_OUTPUT
+          echo "package_hash=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)" >> $GITHUB_OUTPUT
 
       - name: Cache APT packages
         id: apt-cache
@@ -97,14 +116,13 @@ jobs:
           path: |
             /var/cache/apt/archives/*.deb
             /var/lib/apt/lists
-          key: apt-all-${{ runner.arch }}-${{ steps.apt-hash.outputs.package_hash }}
-          restore-keys: |
-            apt-all-${{ runner.arch }}-
+          key: apt-${{ runner.arch }}-${{ steps.apt-hash.outputs.package_hash }}
+          restore-keys: apt-${{ runner.arch }}-
 
-      - name: Install all dependencies
+      - name: Install base dependencies
         run: |
           apt-get install -y --no-install-recommends \
-            devscripts build-essential fakeroot dpkg-dev quilt \
+            devscripts build-essential fakeroot dpkg-dev quilt debhelper-compat \
             cmake pkg-config git wget curl ca-certificates gnupg xxd \
             libgles-dev libegl-dev libgl-dev libgl1-mesa-dev \
             libegl1-mesa-dev libgles2-mesa-dev mesa-common-dev \
@@ -132,16 +150,16 @@ jobs:
             libhyprutils-dev libhyprlang-dev \
             libhyprcursor-dev libhyprgraphics-dev \
             libpipewire-0.3-dev libspa-0.2-dev \
-            || echo "Some backports packages may already be installed"
+            || true
 
-      - name: Install libdisplay-info from sid
+      - name: Install libdisplay-info
         run: |
-          apt-get install -y -t sid --no-install-recommends \
-            libdisplay-info-dev libdisplay-info3 \
-            || echo "Failed to install libdisplay-info from sid"
+          apt-get install -y --no-install-recommends libdisplay-info-dev libdisplay-info3 \
+            || apt-get install -y -t trixie-backports --no-install-recommends libdisplay-info-dev libdisplay-info3 \
+            || echo "libdisplay-info already installed or unavailable"
 
       # ==========================================================
-      # 构建 hyprwayland-scanner
+      # 2. Build hyprwayland-scanner
       # ==========================================================
       - name: Cache hyprwayland-scanner
         id: scanner-cache
@@ -150,7 +168,7 @@ jobs:
           path: |
             /usr/local/bin/hyprwayland-scanner
             /usr/local/lib/cmake/hyprwayland-scanner
-          key: scanner-${{ runner.arch }}
+          key: scanner-${{ runner.arch }}-2024
 
       - name: Build hyprwayland-scanner
         if: steps.scanner-cache.outputs.cache-hit != 'true'
@@ -166,35 +184,36 @@ jobs:
           make -j$(nproc)
           make install
 
-      - name: Verify hyprwayland-scanner
+      - name: Setup PATH
         run: |
           export PATH=/usr/local/bin:$PATH
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
           echo "CMAKE_PREFIX_PATH=/usr/local:/usr" >> $GITHUB_ENV
-          hyprwayland-scanner --version 2>/dev/null || true
 
-      - name: Checkout repository (for hyprland patch)
+      # ==========================================================
+      # 3. Checkout repository (for patch)
+      # ==========================================================
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
       - name: Verify patch file
-        id: patch-hash
-        shell: bash
+        id: patch-info
         run: |
           if [ -f "./${{ env.HYPR_PATCH }}" ]; then
             echo "✅ Patch file found: ./${{ env.HYPR_PATCH }}"
-            HASH=$(sha256sum "./${{ env.HYPR_PATCH }}" | cut -c1-16)
-            echo "hypr_patch_hash=${HASH}" >> $GITHUB_OUTPUT
+            echo "patch_exists=true" >> $GITHUB_OUTPUT
+            echo "patch_hash=$(sha256sum "./${{ env.HYPR_PATCH }}" | cut -c1-16)" >> $GITHUB_OUTPUT
           else
             echo "⚠️ Patch file not found: ./${{ env.HYPR_PATCH }}"
-            echo "hypr_patch_hash=no-patch" >> $GITHUB_OUTPUT
+            echo "patch_exists=false" >> $GITHUB_OUTPUT
           fi
 
       - name: Clean caches if requested
         if: inputs.clean_cache == true
         run: |
-          echo "🧹 Cleaning caches as requested..."
+          echo "🧹 Cleaning caches..."
           rm -rf /tmp/aqua-install /tmp/hypr-install
           rm -rf aquamarine*/ hyprland*/
           dpkg -r libaquamarine11 2>/dev/null || true
@@ -202,16 +221,15 @@ jobs:
           apt-get clean
           rm -rf /var/lib/apt/lists/*
           apt-get update
-          echo "✅ Cache cleaned"
 
       # ==========================================================
-      # 第一部分：构建 Aquamarine（可选）
+      # 4. Build Aquamarine (Anland)
       # ==========================================================
       - name: ═══ Build Aquamarine (Anland) ═══
         if: inputs.skip_aquamarine != true
         run: echo "Starting Aquamarine build..."
 
-      - name: Clone Aquamarine (Anland) from GitHub
+      - name: Clone Aquamarine
         if: inputs.skip_aquamarine != true
         uses: actions/checkout@v4
         with:
@@ -223,55 +241,60 @@ jobs:
       - name: Get Aquamarine commit
         id: aqua-commit
         if: inputs.skip_aquamarine != true
-        shell: bash
         run: |
           cd aquamarine
-          COMMIT=$(git rev-parse HEAD)
-          echo "commit=${COMMIT}" >> $GITHUB_OUTPUT
+          echo "commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          echo "version=$(git describe --tags --always 2>/dev/null || echo '${AQUAMARINE_VERSION}')" >> $GITHUB_OUTPUT
 
       - name: Cache Aquamarine build
-        id: aqua-build-cache
+        id: aqua-cache
         if: inputs.skip_aquamarine != true
         uses: actions/cache@v4
         with:
           path: |
             aquamarine/build
             /tmp/aqua-install
-          key: aqua-build-${{ steps.aqua-commit.outputs.commit }}
+          key: aqua-${{ runner.arch }}-${{ steps.aqua-commit.outputs.commit }}
           restore-keys: |
-            aqua-build-${{ steps.aqua-commit.outputs.commit }}-
-            aqua-build-
+            aqua-${{ runner.arch }}-
 
-      - name: Build Aquamarine (Anland)
-        if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
+      - name: Build Aquamarine
+        if: inputs.skip_aquamarine != true && steps.aqua-cache.outputs.cache-hit != 'true'
         run: |
           cd aquamarine
           mkdir -p build && cd build
-          PC_PATHS=$(find /usr -name "*.pc" -exec dirname {} \; 2>/dev/null | sort -u | tr '\n' ':')
-          export PKG_CONFIG_PATH="${PC_PATHS}:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig"
+
+          # Setup pkg-config paths
+          export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"
           export CMAKE_PREFIX_PATH="/usr/local:/usr"
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
+
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
             -DCMAKE_INSTALL_LIBDIR=/usr/lib/aarch64-linux-gnu \
             -DCMAKE_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:/usr/lib:/usr/local/lib" \
             -DCMAKE_INCLUDE_PATH="/usr/include:/usr/local/include" \
-            -DCMAKE_PREFIX_PATH="/usr/local:/usr" \
-            -DENABLE_ANLAND=ON \
-            -DANLAND_SOCKET="/run/display.sock"
+            -DPIPEWIRE_FOUND=ON \
+            -DENABLE_ANLAND=ON
+
           make -j$(nproc)
           make install DESTDIR=/tmp/aqua-install
 
       - name: Package Aquamarine .deb
-        if: inputs.skip_aquamarine != true && steps.aqua-build-cache.outputs.cache-hit != 'true'
+        if: inputs.skip_aquamarine != true && steps.aqua-cache.outputs.cache-hit != 'true'
         run: |
           cd /tmp/aqua-install
+
+          # Create DEBIAN control
           mkdir -p DEBIAN
           cat > DEBIAN/control << 'EOF'
           Package: libaquamarine11
-          Version: 0.11.0-anland1
+          Version: ${{ env.AQUAMARINE_VERSION }}-anland1
           Architecture: arm64
           Maintainer: sjszero <sjszero@github.com>
           Description: Aquamarine with Anland backend
+           Aquamarine is a rendering backend library with native Anland
+           (Android display) support.
           Depends: libc6 (>= 2.38), libdisplay-info3 (>= 0.3.0),
            libdrm2 (>= 2.4.119), libegl1, libgbm1 (>= 21.3.0~rc1),
            libgcc-s1 (>= 4.5), libhyprutils12 (>= 0.13.1),
@@ -281,49 +304,63 @@ jobs:
           Section: libs
           Priority: optional
           EOF
+
           cat > DEBIAN/postinst << 'EOF'
           #!/bin/sh
           set -e
           ldconfig
           EOF
           chmod 755 DEBIAN/postinst
+
+          # Fix permissions
           find usr -type f -exec chmod 644 {} \;
           find usr/lib -name '*.so*' -exec chmod 755 {} \; 2>/dev/null || true
-          cd /
-          dpkg-deb --build /tmp/aqua-install /libaquamarine11_0.11.0-anland1_arm64.deb
 
-      - name: Install Aquamarine .deb
+          cd /
+          dpkg-deb --build /tmp/aqua-install /libaquamarine11_${AQUAMARINE_VERSION}-anland1_arm64.deb
+
+      - name: Install Aquamarine
         if: inputs.skip_aquamarine != true
         run: |
+          # Remove old versions
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
-          apt-get install -y -t sid --no-install-recommends libdisplay-info3 || \
-            apt-get install -y --no-install-recommends libdisplay-info3 || true
-          if [ -f /libaquamarine11_*.deb ]; then
+
+          # Ensure libdisplay-info is installed
+          apt-get install -y --no-install-recommends libdisplay-info3 2>/dev/null || true
+
+          # Find and install .deb
+          DEB=$(find / -maxdepth 1 -name "libaquamarine11_*.deb" 2>/dev/null | head -1)
+          if [ -n "$DEB" ]; then
+            dpkg -i "$DEB" || apt-get install -f -y
+            dpkg -i "$DEB"
+            ldconfig
+            echo "✅ Aquamarine installed from: $DEB"
+          elif [ -d /tmp/aqua-install ]; then
+            # Rebuild from cache if .deb missing
+            cd /tmp/aqua-install
+            find usr -type f -exec chmod 644 {} \;
+            find usr/lib -name '*.so*' -exec chmod 755 {} \; 2>/dev/null || true
+            cd /
+            dpkg-deb --build /tmp/aqua-install /libaquamarine11_${AQUAMARINE_VERSION}-anland1_arm64.deb
             dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
             dpkg -i /libaquamarine11_*.deb
             ldconfig
-            echo "✅ Aquamarine installed"
           else
-            echo "⚠️ Aquamarine .deb not found, attempting to install from cache..."
-            if [ -d /tmp/aqua-install ]; then
-              cd /tmp/aqua-install
-              find usr -type f -exec chmod 644 {} \;
-              find usr/lib -name '*.so*' -exec chmod 755 {} \; 2>/dev/null || true
-              cd /
-              dpkg-deb --build /tmp/aqua-install /libaquamarine11_0.11.0-anland1_arm64.deb
-              dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
-              dpkg -i /libaquamarine11_*.deb
-              ldconfig
-            else
-              echo "❌ No Aquamarine build found."
-              exit 1
-            fi
+            echo "❌ No Aquamarine build found"
+            exit 1
+          fi
+
+          # Verify installation
+          if ldconfig -p | grep -q libaquamarine; then
+            echo "✅ Aquamarine library found in ldconfig"
+          else
+            echo "⚠️ Aquamarine library not found in ldconfig"
           fi
 
       # ==========================================================
-      # 第二部分：构建 Hyprland（可选）
+      # 5. Build Hyprland (Anland)
       # ==========================================================
       - name: ═══ Build Hyprland (Anland) ═══
         if: inputs.skip_hyprland != true
@@ -335,7 +372,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.HYPR_SRC }}-*
-          key: src-hypr-${{ inputs.hyprland_version }}-${{ steps.patch-hash.outputs.hypr_patch_hash }}
+          key: src-hypr-${{ inputs.hyprland_version }}-${{ steps.patch-info.outputs.patch_hash }}
           restore-keys: |
             src-hypr-${{ inputs.hyprland_version }}-
             src-hypr-
@@ -343,157 +380,72 @@ jobs:
       - name: Fetch Hyprland source
         if: inputs.skip_hyprland != true
         run: |
-          # 总是尝试获取源码，确保源码目录存在
           if [ ! -d "${{ env.HYPR_SRC }}-*" ] || [ "${{ inputs.clean_cache }}" == "true" ]; then
             apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
           fi
-
-      - name: Apply Anland patch to Hyprland
-        if: inputs.skip_hyprland != true
-        run: |
-          echo "=========================================="
-          echo "🔧 Starting patch application process"
-          echo "=========================================="
-
-          # 进入 Hyprland 源码目录
           SOURCE_DIR=$(find . -maxdepth 1 -type d -name "${{ env.HYPR_SRC }}-*" | head -1)
           if [ -z "$SOURCE_DIR" ]; then
-            echo "❌ Hyprland source directory not found, fetching..."
-            apt-get source ${{ env.HYPR_SRC }}=${{ inputs.hyprland_version }}
-            SOURCE_DIR=$(find . -maxdepth 1 -type d -name "${{ env.HYPR_SRC }}-*" | head -1)
+            echo "❌ Hyprland source directory not found"
+            exit 1
           fi
-          echo "📁 Source directory: $SOURCE_DIR"
-          cd "$SOURCE_DIR"
+          echo "HYPR_SOURCE_DIR=$SOURCE_DIR" >> $GITHUB_ENV
 
-          # 检查补丁文件
+      - name: Apply Anland patch
+        if: inputs.skip_hyprland != true
+        run: |
+          cd "${{ env.HYPR_SOURCE_DIR }}"
+
           PATCH_FILE="../${{ env.HYPR_PATCH }}"
-          echo "📄 Patch file path: $PATCH_FILE"
-
           if [ ! -f "$PATCH_FILE" ]; then
-            echo "⚠️  Patch file not found at $PATCH_FILE"
-            echo "📂 Contents of parent directory:"
-            ls -la ../ | head -20
+            echo "❌ Patch file not found: $PATCH_FILE"
+            exit 1
+          fi
+
+          echo "📄 Applying patch: $PATCH_FILE"
+
+          # Check if patch is already applied
+          if grep -q "ANLAND" src/Compositor.cpp 2>/dev/null || \
+             grep -q "anland" src/Compositor.cpp 2>/dev/null; then
+            echo "✅ Patch already applied (found markers in Compositor.cpp)"
             exit 0
           fi
 
-          echo "✅ Patch file found"
-          echo ""
-
-          # 显示补丁文件信息
-          echo "📊 Patch file info:"
-          echo "   Size: $(wc -c < "$PATCH_FILE") bytes"
-          echo "   Lines: $(wc -l < "$PATCH_FILE") lines"
-          echo "   First 5 lines:"
-          head -5 "$PATCH_FILE" | sed 's/^/     /'
-          echo ""
-
-          # 检查补丁是否已应用
-          echo "🔍 Checking if patch is already applied..."
+          # Try patch application
           if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
-            echo "✅ Patch is NOT applied, proceeding..."
+            echo "✅ Dry-run successful, applying..."
+            patch -p1 < "$PATCH_FILE"
+          elif patch -p1 --fuzz=5 < "$PATCH_FILE" 2>/dev/null; then
+            echo "✅ Applied with fuzz=5"
+          elif patch -p1 --force < "$PATCH_FILE" 2>/dev/null; then
+            echo "✅ Applied with --force"
           else
-            echo "ℹ️  Patch is already applied or dry-run failed"
-            echo "   Checking for patch markers..."
-            if grep -q "anland" src/Compositor.cpp 2>/dev/null || \
-               grep -q "anland" src/config/ConfigManager.cpp 2>/dev/null || \
-               grep -q "ANLAND" src/Compositor.cpp 2>/dev/null; then
-              echo "✅ Patch appears to be already applied (found 'anland' markers in source)"
-            else
-              echo "⚠️  Patch may not be applied, but dry-run failed. Attempting force apply..."
-            fi
+            echo "❌ All patch methods failed"
+            echo "Patch file content (first 20 lines):"
+            head -20 "$PATCH_FILE"
+            exit 1
           fi
-          echo ""
 
-          # 尝试应用补丁
-          echo "📦 Applying patch..."
-          APPLIED=false
-
-          # 方法1: git apply (推荐)
-          echo "   [1/4] Trying git apply..."
-          if git apply --verbose --ignore-space-change --ignore-whitespace "$PATCH_FILE" 2>&1; then
-            echo "   ✅ git apply succeeded!"
-            APPLIED=true
+          # Verify patch application
+          if grep -q "ANLAND" src/Compositor.cpp 2>/dev/null; then
+            echo "✅ Patch verified successfully"
           else
-            echo "   ⚠️  git apply failed, trying method 2..."
-
-            # 方法2: patch with dry-run check
-            echo "   [2/4] Trying patch with dry-run..."
-            if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
-              echo "   ✅ Dry-run succeeded, applying..."
-              if patch -p1 < "$PATCH_FILE" 2>&1; then
-                echo "   ✅ patch succeeded!"
-                APPLIED=true
-              else
-                echo "   ❌ patch failed unexpectedly"
-              fi
-            else
-              echo "   ℹ️  Dry-run indicates patch is already applied"
-              APPLIED=true  # 已应用视为成功
-            fi
+            echo "⚠️ Patch verification failed - no ANLAND markers found"
           fi
-
-          # 如果还没成功，尝试 fuzz
-          if [ "$APPLIED" != "true" ]; then
-            echo "   [3/4] Trying patch with --fuzz=5..."
-            if patch -p1 --fuzz=5 < "$PATCH_FILE" 2>&1; then
-              echo "   ✅ patch with fuzz succeeded!"
-              APPLIED=true
-            else
-              echo "   ❌ patch with fuzz failed"
-            fi
-          fi
-
-          # 最后尝试强制应用
-          if [ "$APPLIED" != "true" ]; then
-            echo "   [4/4] Trying patch with --force..."
-            if patch -p1 --force < "$PATCH_FILE" 2>&1; then
-              echo "   ✅ patch with force succeeded!"
-              APPLIED=true
-            else
-              echo "   ❌ All patch methods failed!"
-            fi
-          fi
-
-          echo ""
-
-          # 验证补丁是否真的应用了
-          echo "🔍 Verifying patch application..."
-          if grep -r "anland" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -3; then
-            echo "✅ Found 'anland' markers in source code:"
-            grep -r "anland" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -5 | sed 's/^/   /'
-            echo ""
-            echo "   Patch appears to be applied successfully."
-          elif grep -r "ANLAND" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -3; then
-            echo "✅ Found 'ANLAND' markers in source code:"
-            grep -r "ANLAND" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -5 | sed 's/^/   /'
-            echo ""
-            echo "   Patch appears to be applied successfully."
-          else
-            echo "⚠️  No 'anland' markers found in source code."
-            echo "   Patch may not have been applied correctly."
-          fi
-
-          echo "=========================================="
-          echo "🏁 Patch application process complete"
-          echo "=========================================="
 
       - name: Bump Hyprland changelog
-        if: inputs.skip_hyprland != true && steps.hypr-src-cache.outputs.cache-hit != 'true'
+        if: inputs.skip_hyprland != true
         run: |
-          cd ./${{ env.HYPR_SRC }}-*/
-          if ! grep -q "+anland1" debian/changelog; then
+          cd "${{ env.HYPR_SOURCE_DIR }}"
+          if ! grep -q "+anland" debian/changelog; then
             VER=$(dpkg-parsechangelog --show-field Version)
-            NEW_VER="${VER}+anland1"
-            dch --newversion "$NEW_VER" "Add Anland backend support (CI build)"
-            echo "Hypr version: $NEW_VER"
-          else
-            echo "Hypr changelog already has +anland1 suffix, skipping"
+            dch --newversion "${VER}+anland1" "Add Anland backend support (CI build)"
+            echo "📝 Changelog bumped to ${VER}+anland1"
           fi
 
       - name: Create shlibs.local
         if: inputs.skip_hyprland != true
         run: |
-          cd ./${{ env.HYPR_SRC }}-*/
+          cd "${{ env.HYPR_SOURCE_DIR }}"
           mkdir -p debian
           cat > debian/shlibs.local << 'EOF'
           libaquamarine 11 libaquamarine11 (>= 0.11.0)
@@ -503,77 +455,67 @@ jobs:
       - name: Install Hyprland build dependencies
         if: inputs.skip_hyprland != true
         run: |
-          cd ./${{ env.HYPR_SRC }}-*/
-          dpkg -r libaquamarine11 2>/dev/null || true
-          dpkg -r libaquamarine-dev 2>/dev/null || true
-          rm -rf /usr/include/aquamarine 2>/dev/null || true
-          apt autoremove -y || true
+          cd "${{ env.HYPR_SOURCE_DIR }}"
+          # Ensure Aquamarine is installed for build-dep
+          if ldconfig -p | grep -q libaquamarine; then
+            echo "✅ Aquamarine found"
+          else
+            echo "⚠️ Aquamarine not found, trying to reinstall"
+            DEB=$(find / -maxdepth 1 -name "libaquamarine11_*.deb" 2>/dev/null | head -1)
+            if [ -n "$DEB" ]; then
+              dpkg -i "$DEB" || apt-get install -f -y
+              dpkg -i "$DEB"
+            fi
+          fi
 
           apt-get build-dep -y ./ || {
-            echo "build-dep failed, trying with backports..."
+            echo "⚠️ build-dep failed, installing dependencies manually..."
             apt-get install -y -t trixie-backports --no-install-recommends \
               libxkbcommon-dev wayland-protocols \
               libinput-dev \
               libhyprutils-dev libhyprlang-dev \
               libhyprcursor-dev libhyprgraphics-dev \
               libpipewire-0.3-dev libspa-0.2-dev \
-              || echo "Some packages may already be installed"
-            apt-get build-dep -y ./
+              || true
+            apt-get build-dep -y ./ || true
           }
-
-          dpkg -r libaquamarine11 2>/dev/null || true
-          dpkg -r libaquamarine-dev 2>/dev/null || true
-          rm -rf /usr/include/aquamarine 2>/dev/null || true
-          apt autoremove -y || true
-
-          if [ -f /libaquamarine11_*.deb ]; then
-            dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
-            dpkg -i /libaquamarine11_*.deb
-            ldconfig
-            echo "✅ Aquamarine reinstalled"
-          else
-            echo "⚠️ Aquamarine .deb not found, skipping reinstall"
-          fi
 
       - name: Build Hyprland .deb
         if: inputs.skip_hyprland != true
         run: |
-          cd ./${{ env.HYPR_SRC }}-*/
+          cd "${{ env.HYPR_SOURCE_DIR }}"
           ldconfig
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
       # ==========================================================
-      # 收集 artifacts
+      # 6. Collect and upload artifacts
       # ==========================================================
       - name: Collect artifacts
-        shell: bash
         run: |
           mkdir -p artifacts
 
+          # Aquamarine
           if [ -f /libaquamarine11_*.deb ]; then
             cp /libaquamarine11_*.deb artifacts/
             echo "✅ Copied Aquamarine .deb"
-          else
-            echo "⚠️ No Aquamarine .deb found"
           fi
 
+          # Hyprland
           if [ "${{ inputs.skip_hyprland }}" != "true" ]; then
             find . -maxdepth 1 -name "*.deb" -type f | while read -r deb; do
               filename=$(basename "$deb")
-              if echo "$filename" | grep -q "^hyprland_[0-9].*\.deb$" && ! echo "$filename" | grep -q "dbgsym\|dev"; then
-                cp "$deb" artifacts/
-                echo "✅ Kept: $filename"
-              elif echo "$filename" | grep -q "^hyprland-backgrounds_.*\.deb$" && ! echo "$filename" | grep -q "dbgsym"; then
-                cp "$deb" artifacts/
-                echo "✅ Kept: $filename"
-              else
-                echo "⏭️ Skipped: $filename"
-              fi
+              case "$filename" in
+                hyprland_[0-9]*.deb|hyprland-backgrounds_*.deb)
+                  if ! echo "$filename" | grep -q "dbgsym\|dev"; then
+                    cp "$deb" artifacts/
+                    echo "✅ Kept: $filename"
+                  fi
+                  ;;
+              esac
             done
           fi
 
-          echo ""
-          echo "=== Final artifacts ==="
+          echo "=== 📦 Artifacts ==="
           ls -la artifacts/
 
       - name: Upload artifacts
@@ -583,24 +525,48 @@ jobs:
           path: artifacts/*.deb
           retention-days: 7
 
-      - name: Summary
+      - name: Build summary
         run: |
-          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Item | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| APT Cache | ${{ steps.apt-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| hyprwayland-scanner | ${{ steps.scanner-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Aquamarine Build | ${{ steps.aqua-build-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Hyprland Source | ${{ steps.hypr-src-cache.outputs.cache-hit }} |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          ls -la artifacts/ >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "No artifacts found" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Install" >> $GITHUB_STEP_SUMMARY
-          echo '```bash' >> $GITHUB_STEP_SUMMARY
-          echo "sudo dpkg -i libaquamarine11_*.deb hyprland_*.deb hyprland-backgrounds_*.deb" >> $GITHUB_STEP_SUMMARY
-          echo "sudo apt-get install -f -y" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat > $GITHUB_STEP_SUMMARY << 'EOF'
+          ## 🏗️ Build Summary
+
+          | Item | Status |
+          |------|--------|
+          | APT Cache | ${{ steps.apt-cache.outputs.cache-hit }} |
+          | Scanner Cache | ${{ steps.scanner-cache.outputs.cache-hit }} |
+          | Aquamarine Cache | ${{ steps.aqua-cache.outputs.cache-hit }} |
+          | Hyprland Source Cache | ${{ steps.hypr-src-cache.outputs.cache-hit }} |
+
+          ### 📦 Artifacts
+
+          \`\`\`
+          $(ls -la artifacts/ 2>/dev/null || echo "No artifacts")
+          \`\`\`
+
+          ### 📥 Install
+
+          \`\`\`bash
+          sudo dpkg -i libaquamarine11_*.deb hyprland_*.deb hyprland-backgrounds_*.deb
+          sudo apt-get install -f -y
+          \`\`\`
+          EOF
+
+      - name: Final verification
+        run: |
+          echo "=== 🧪 Verification ==="
+
+          # Check Aquamarine
+          if ldconfig -p | grep -q libaquamarine; then
+            echo "✅ Aquamarine library installed"
+            ldconfig -p | grep libaquamarine
+          else
+            echo "⚠️ Aquamarine library not found"
+          fi
+
+          # Check artifacts
+          if [ -d artifacts ] && [ "$(ls -A artifacts)" ]; then
+            echo "✅ Artifacts ready:"
+            ls -la artifacts/
+          else
+            echo "⚠️ No artifacts found"
+          fi

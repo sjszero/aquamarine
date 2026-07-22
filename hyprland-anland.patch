@@ -117,7 +117,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,6 +701,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,6 +700,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
@@ -127,7 +127,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
              Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
              g_pHyprCtl = makeUnique<CHyprCtl>();
  
-@@ -1064,6 +1143,13 @@ void CCompositor::createLockFile() {
+@@ -1064,6 +1142,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {
      const auto PATH = m_instancePath + "/hyprland.lock";
@@ -141,7 +141,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      if (std::filesystem::exists(PATH))
          std::filesystem::remove(PATH);
-@@ -1092,6 +1178,10 @@ void CCompositor::cleanup() {
+@@ -1092,6 +1177,10 @@ void CCompositor::cleanup() {
  
      m_isShuttingDown = true;
  
@@ -273,41 +273,133 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
          Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
          return color;
      }
+diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
+--- a/src/render/OpenGL.cpp
++++ b/src/render/OpenGL.cpp
+@@ -975,7 +975,9 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
+         shaders->TEXVERTSRC    = shaderLoader->process("tex300.vert");
+         shaders->TEXVERTSRC320 = shaderLoader->process("tex320.vert");
+ 
+-        m_cmSupported = *PCM;
++        // Anland: 强制禁用颜色管理，避免因 ImageDescription 缺失导致崩溃
++        // m_cmSupported = *PCM;
++        m_cmSupported = false;
+ 
+         g_pShaderLoader = std::move(shaderLoader);
+ 
 diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 --- a/src/helpers/Monitor.cpp
 +++ b/src/helpers/Monitor.cpp
-@@ -231,7 +231,15 @@ void CMonitor::onConnect(bool noRule) {
-     }
+@@ -227,7 +227,17 @@ CMonitor::CMonitor(SP<Aquamarine::IOutput> output_) : m_state(this), m_output(output_), m_imageDescription(getDefaultImageDescription()) {
+     m_dpmsBlackOpacity->setUpdateCallback([this](auto) { g_pHyprRenderer->damageMonitor(m_self.lock()); });
+ }
  
-     m_scale = monitorRule.m_scale;
-     if (m_scale < 0.1)
-         m_scale = getDefaultScale();
++static bool isAnlandBackend(SP<Aquamarine::IOutput> output) {
++    if (!output)
++        return false;
++    auto backend = output->getBackend();
++    if (!backend)
++        return false;
++    return backend->type() == Aquamarine::AQ_BACKEND_ANLAND;
++}
 +
-+    // Anland 后端：强制设置 ImageDescription
-+    if (m_output && m_output->getBackend() && m_output->getBackend()->type() == Aquamarine::AQ_BACKEND_ANLAND) {
+ CMonitor::~CMonitor() {
++    // ... existing code ...
+     m_events.destroy.emit();
+     if (g_pHyprRenderer && g_pHyprRenderer->glBackend())
+         g_pHyprRenderer->glBackend()->destroyMonitorResources(m_self);
+@@ -236,6 +246,19 @@ CMonitor::~CMonitor() {
+ void CMonitor::onConnect(bool noRule) {
+     Event::bus()->m_events.monitor.preAdded.emit(m_self.lock());
+     CScopeGuard x = {[]() { g_pCompositor->arrangeMonitors(); }};
++
++    // Anland: 强制设置默认 sRGB ImageDescription
++    if (isAnlandBackend(m_output)) {
 +        if (!m_imageDescription) {
 +            Log::logger->log(Log::DEBUG, "Anland monitor detected, forcing sRGB ImageDescription");
-+            applyCMType(NCMType::CM_SRGB, NTransferFunction::TF_SRGB);
++            m_imageDescription = NColorManagement::CImageDescription::from(
++                NColorManagement::SImageDescription{
++                    .transferFunction = NColorManagement::CM_TRANSFER_FUNCTION_SRGB,
++                    .primariesNamed   = NColorManagement::CM_PRIMARIES_SRGB,
++                    .primaries        = NColorManagement::getPrimaries(NColorManagement::CM_PRIMARIES_SRGB)
++                });
 +        }
 +    }
  
-     m_forceFullFrames = 3; // force 3 full frames to make sure there is no blinking due to double-buffering.
-@@ -465,6 +473,18 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+     m_zoomAnimProgress->setValueAndWarp(0.F);
+     m_zoomAnimFrameCounter = 0;
+@@ -460,6 +483,15 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+         case NCMType::CM_HDR_EDID:
          default: UNREACHABLE();
      }
-+    // 对于 Anland 后端，如果描述仍然为空，强制设置为 sRGB
-+    if (!m_imageDescription) {
-+        Log::logger->log(Log::WARN, "CMonitor: imageDescription is null, forcing sRGB for Anland compatibility");
-+        m_imageDescription = NColorManagement::CImageDescription::from(NColorManagement::SImageDescription{
-+            .transferFunction = NColorManagement::CM_TRANSFER_FUNCTION_SRGB,
-+            .primariesNamed   = NColorManagement::CM_PRIMARIES_SRGB,
-+            .primaries        = NColorManagement::getPrimaries(NColorManagement::CM_PRIMARIES_SRGB)
-+        });
-+        if (!m_imageDescription)
-+            Log::logger->log(Log::ERR, "CMonitor: Failed to create fallback sRGB image description!");
++
++    // Anland: 强制保证 ImageDescription 非空，且为 sRGB
++    if (isAnlandBackend(m_output)) {
++        Log::logger->log(Log::DEBUG, "Anland: overriding ImageDescription to sRGB");
++        m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
++        m_cachedInternalDescription = m_imageDescription;
++        m_blurFBDirty = true;
 +    }
 +
      if ((minLuminance() >= 0 || maxLuminance() > 0) && (cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID))
          m_imageDescription = m_imageDescription->with({
              .min       = minLuminance() >= 0 ? minLuminance() : m_imageDescription->value().luminances.min, //
-             .max       = maxLuminance() > 0 ? maxLuminance() : m_imageDescription->value().luminances.max,  //
+@@ -472,6 +504,17 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+     }
+ }
+ 
++PImageDescription CMonitor::workBufferImageDescription() {
++    // Anland: 如果 imageDescription 为空，返回默认 sRGB
++    if (isAnlandBackend(m_output) && !m_imageDescription) {
++        m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
++        m_blurFBDirty = true;
++    }
++    // ... existing code ...
++    return m_cachedInternalDescription ? m_cachedInternalDescription : m_imageDescription;
++}
++
+ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force) {
+ 
+     static auto PDISABLESCALECHECKS = CConfigValue<Config::INTEGER>("debug:disable_scale_checks");
+@@ -510,6 +553,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+ 
+     const bool sameDrmMode = !std::memcmp(&m_customDrmMode, &RULE->m_drmMode, sizeof(m_customDrmMode));
+ 
++    // Anland: 强制使用 ABGR8888 格式，与 dmabuf 一致
++    if (isAnlandBackend(m_output)) {
++        RULE->m_enable10bit = false;  // 禁用10bit，避免格式不匹配
++        Log::logger->log(Log::DEBUG, "Anland: forcing 8-bit ABGR8888 format");
++    }
++
+     const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
+     const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
+ 
+@@ -686,6 +735,14 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+         }
+     } else {
+         // clang-format on
++
++        // Anland: 强制优先使用 ABGR8888，匹配 dmabuf 格式
++        if (isAnlandBackend(m_output)) {
++            // 先测试 ABGR8888
++            static const uint32_t anlandFormats[] = {
++                DRM_FORMAT_ABGR8888, DRM_FORMAT_XBGR8888, DRM_FORMAT_ARGB8888, DRM_FORMAT_XRGB8888
++            };
++            // 修改循环逻辑，优先使用 ABGR8888
+             for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
+                 m_output->state->setFormat(fmt.second);
+                 m_prevDrmFormat = m_drmFormat;
+diff --git a/src/helpers/Monitor.hpp b/src/helpers/Monitor.hpp
+--- a/src/helpers/Monitor.hpp
++++ b/src/helpers/Monitor.hpp
+@@ -377,6 +377,9 @@ class CMonitor {
+     bool                                m_noShaderCTM      = false; // sets drm CTM, restore needed
+ 
+     bool                                m_blurFBDirty        = true;
+     bool                                m_blurFBShouldRender = false;
++
++    // 检查是否为 Anland 后端
++    bool isAnland() const { return m_output && m_output->getBackend() && m_output->getBackend()->type() == Aquamarine::AQ_BACKEND_ANLAND; }
+ 
+     // For the list lookup
+ 

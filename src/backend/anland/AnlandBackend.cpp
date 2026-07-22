@@ -512,17 +512,11 @@ void CAnlandBackend::updateTextInput(const InputEvent& ev) {
 std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     std::vector<SDRMFormat> formats;
 
-    // Add formats in priority order (best first)
-    // 10-bit formats (supports HDR/WCG) - Adreno 750 supports these
-    formats.push_back({.drmFormat = DRM_FORMAT_ABGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XBGR2101010, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-
-    // FP16 formats (HDR with higher precision)
-    formats.push_back({.drmFormat = DRM_FORMAT_ABGR16161616F, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-
-    // 8-bit formats (fallback - always supported)
+    // 只返回 dmabuf 实际使用的格式，优先 ABGR8888
+    // 这样 Hyprland 会选择与导入纹理一致的格式
     formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    // 保留其他格式作为 fallback，但 ABGR 排在前面
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
 
