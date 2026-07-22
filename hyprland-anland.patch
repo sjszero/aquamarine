@@ -254,10 +254,45 @@ diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
          std::map<PHLMONITORREF, SP<IFramebuffer>> m_monitorBGFBs;
  
          struct {
+diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
+--- a/src/render/Renderer.cpp
++++ b/src/render/Renderer.cpp
+@@ -2444,6 +2444,15 @@ CHyprColor IHyprRenderer::getConvertedColor(const CHyprColor& color) {
+     const auto DESCR = m_renderData.currentFB ? m_renderData.currentFB->imageDescription() : workBufferImageDescription();
+ 
+     if (!DESCR) {
++        // Anland 后端：如果没有 ImageDescription，直接返回原始颜色
++        // 这避免了因颜色管理缺失导致的崩溃
++        if (getenv("ANLAND")) {
++            Log::logger->log(Log::WARN, "getConvertedColor: no image description for Anland, returning raw color");
++            return color;
++        }
++        // 非 Anland 后端：记录错误并返回原始颜色
++        Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
++        return color;
+         Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
+         return color;
+     }
 diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 --- a/src/helpers/Monitor.cpp
 +++ b/src/helpers/Monitor.cpp
-@@ -465,6 +465,18 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+@@ -231,7 +231,15 @@ void CMonitor::onConnect(bool noRule) {
+     }
+ 
+     m_scale = monitorRule.m_scale;
+     if (m_scale < 0.1)
+         m_scale = getDefaultScale();
++
++    // Anland 后端：强制设置 ImageDescription
++    if (m_output && m_output->getBackend() && m_output->getBackend()->type() == Aquamarine::AQ_BACKEND_ANLAND) {
++        if (!m_imageDescription) {
++            Log::logger->log(Log::DEBUG, "Anland monitor detected, forcing sRGB ImageDescription");
++            applyCMType(NCMType::CM_SRGB, NTransferFunction::TF_SRGB);
++        }
++    }
+ 
+     m_forceFullFrames = 3; // force 3 full frames to make sure there is no blinking due to double-buffering.
+@@ -465,6 +473,18 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
          default: UNREACHABLE();
      }
 +    // 对于 Anland 后端，如果描述仍然为空，强制设置为 sRGB
