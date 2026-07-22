@@ -52,14 +52,18 @@ jobs:
           deb http://deb.debian.org/debian trixie-updates main
           deb http://deb.debian.org/debian-security trixie-security main
           deb http://deb.debian.org/debian trixie-backports main
+          deb http://deb.debian.org/debian sid main
           deb-src http://deb.debian.org/debian trixie main
           deb-src http://deb.debian.org/debian trixie-updates main
           deb-src http://deb.debian.org/debian-security trixie-security main
           deb-src http://deb.debian.org/debian trixie-backports main
+          deb-src http://deb.debian.org/debian sid main
           EOF
           rm -f /etc/apt/sources.list.d/debian.sources 2>/dev/null || true
           cat > /etc/apt/apt.conf.d/99backports << 'EOF'
           APT::Default-Release "trixie";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
           EOF
           apt-get update
 
@@ -106,6 +110,9 @@ jobs:
 
           # Shader compilation
           glslang-dev glslang-tools
+
+          # libdisplay-info from sid
+          libdisplay-info-dev libdisplay-info3
           EOF
           echo "package_hash=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)" >> $GITHUB_OUTPUT
 
@@ -142,21 +149,40 @@ jobs:
             hwdata \
             glslang-dev glslang-tools
 
-      - name: Install backports dependencies
+      - name: Install backports and sid dependencies
         run: |
+          # libdisplay-info from sid (required for Aquamarine)
+          apt-get install -y -t sid --no-install-recommends \
+            libdisplay-info-dev libdisplay-info3 \
+            || apt-get install -y -t trixie-backports --no-install-recommends \
+            libdisplay-info-dev libdisplay-info3 \
+            || echo "⚠️ libdisplay-info not available"
+
+          # Backports packages
           apt-get install -y -t trixie-backports --no-install-recommends \
             libxkbcommon-dev wayland-protocols \
             libinput-dev \
             libhyprutils-dev libhyprlang-dev \
             libhyprcursor-dev libhyprgraphics-dev \
             libpipewire-0.3-dev libspa-0.2-dev \
-            || true
+            || echo "⚠️ Some backports packages not available"
 
-      - name: Install libdisplay-info
+      - name: Verify libdisplay-info
         run: |
-          apt-get install -y --no-install-recommends libdisplay-info-dev libdisplay-info3 \
-            || apt-get install -y -t trixie-backports --no-install-recommends libdisplay-info-dev libdisplay-info3 \
-            || echo "libdisplay-info already installed or unavailable"
+          if pkg-config --exists libdisplay-info; then
+            echo "✅ libdisplay-info found:"
+            pkg-config --modversion libdisplay-info
+          else
+            echo "⚠️ libdisplay-info not found, installing from source..."
+            cd /tmp
+            git clone --depth 1 https://gitlab.freedesktop.org/emersion/libdisplay-info.git
+            cd libdisplay-info
+            meson setup build -Dprefix=/usr
+            ninja -C build
+            ninja -C build install
+            ldconfig
+            echo "✅ libdisplay-info installed from source"
+          fi
 
       # ==========================================================
       # 2. Build hyprwayland-scanner
@@ -188,6 +214,7 @@ jobs:
         run: |
           export PATH=/usr/local/bin:$PATH
           echo "PATH=/usr/local/bin:$PATH" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
           echo "CMAKE_PREFIX_PATH=/usr/local:/usr" >> $GITHUB_ENV
 
       # ==========================================================
@@ -244,7 +271,6 @@ jobs:
         run: |
           cd aquamarine
           echo "commit=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
-          echo "version=$(git describe --tags --always 2>/dev/null || echo '${AQUAMARINE_VERSION}')" >> $GITHUB_OUTPUT
 
       - name: Cache Aquamarine build
         id: aqua-cache
@@ -266,7 +292,11 @@ jobs:
 
           # Setup pkg-config paths
           export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"
-          export CMAKE_PREFIX_PATH="/usr/local:/usr"
+
+          # Print pkg-config info for debugging
+          echo "=== pkg-config check ==="
+          pkg-config --modversion libdisplay-info 2>/dev/null || echo "libdisplay-info not found via pkg-config"
+          pkg-config --cflags libdisplay-info 2>/dev/null || echo "libdisplay-info cflags not found"
 
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
@@ -328,7 +358,8 @@ jobs:
           rm -rf /usr/include/aquamarine 2>/dev/null || true
 
           # Ensure libdisplay-info is installed
-          apt-get install -y --no-install-recommends libdisplay-info3 2>/dev/null || true
+          apt-get install -y --no-install-recommends libdisplay-info3 2>/dev/null || \
+            apt-get install -y -t sid --no-install-recommends libdisplay-info3 2>/dev/null || true
 
           # Find and install .deb
           DEB=$(find / -maxdepth 1 -name "libaquamarine11_*.deb" 2>/dev/null | head -1)
@@ -355,6 +386,7 @@ jobs:
           # Verify installation
           if ldconfig -p | grep -q libaquamarine; then
             echo "✅ Aquamarine library found in ldconfig"
+            ldconfig -p | grep libaquamarine
           else
             echo "⚠️ Aquamarine library not found in ldconfig"
           fi
@@ -558,7 +590,7 @@ jobs:
           # Check Aquamarine
           if ldconfig -p | grep -q libaquamarine; then
             echo "✅ Aquamarine library installed"
-            ldconfig -p | grep libaquamarine
+            ldconfig -p | grep libaquamarine || true
           else
             echo "⚠️ Aquamarine library not found"
           fi
