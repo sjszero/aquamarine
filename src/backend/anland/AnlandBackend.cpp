@@ -161,11 +161,12 @@ void CAnlandBackend::onReady() {
 
     // Pass EGL display to output for direct rendering
     if (m_output) {
-        // The EGL context should have been set by Hyprland via passEGLToAnlandBackend
-        // This is a fallback: if not set, try to get it from the current context
-        if (m_output->m_eglDisplay == EGL_NO_DISPLAY) {
-            EGLDisplay dpy = eglGetCurrentDisplay();
-            EGLContext ctx = eglGetCurrentContext();
+        // 使用 getter 方法获取 EGL 显示，不直接访问私有成员
+        EGLDisplay dpy = eglGetCurrentDisplay();
+        EGLContext ctx = eglGetCurrentContext();
+        
+        // 只有当输出尚未设置 EGL 时才设置
+        if (m_output->getEGLDisplay() == EGL_NO_DISPLAY) {
             if (dpy != EGL_NO_DISPLAY && ctx != EGL_NO_CONTEXT) {
                 m_output->setEGL(dpy, ctx);
                 ANLAND_LOG("EGL context obtained from current context");

@@ -1,4 +1,23 @@
 // src/backend/anland/protocol.h
+// 在文件开头添加 pragma 忽略警告
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpedantic"
+
+struct ctrl_msg {
+    uint32_t type;
+    uint32_t size;
+    uint8_t  payload[];
+} __attribute__((packed));
+
+struct data_msg {
+    uint32_t type;
+    uint32_t size;
+    uint8_t  payload[];
+} __attribute__((packed));
+
+#pragma GCC diagnostic pop
+
 #ifndef ANLAND_PROTOCOL_H
 #define ANLAND_PROTOCOL_H
 

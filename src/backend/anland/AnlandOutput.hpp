@@ -70,8 +70,10 @@ public:
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
     CSharedPointer<CBackend> getCBackend() const;
 
-    // EGL context management
+    // EGL context management - public accessors
     void setEGL(EGLDisplay dpy, EGLContext ctx);
+    EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
+    EGLContext getEGLContext() const { return m_eglContext; }
     void setImageDescription(void* desc) { m_imageDescription = desc; }
     void* getImageDescription() const { return m_imageDescription; }
 
@@ -124,7 +126,7 @@ private:
     // Direct rendering: bypass swapchain for FBO stability
     bool m_useDirectRendering = true;
 
-    // EGL context
+    // EGL context (private, accessed via getters/setters)
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     EGLContext m_eglContext = EGL_NO_CONTEXT;
 
