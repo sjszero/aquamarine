@@ -145,7 +145,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,6 +710,13 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,6 +709,13 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
@@ -159,7 +159,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
              Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
              g_pHyprCtl = makeUnique<CHyprCtl>();
  
-@@ -1064,6 +1157,13 @@ void CCompositor::createLockFile() {
+@@ -1064,6 +1156,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {
      const auto PATH = m_instancePath + "/hyprland.lock";
@@ -173,7 +173,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      if (std::filesystem::exists(PATH))
          std::filesystem::remove(PATH);
-@@ -1092,6 +1192,10 @@ void CCompositor::cleanup() {
+@@ -1092,6 +1191,10 @@ void CCompositor::cleanup() {
  
      m_isShuttingDown = true;
  
@@ -288,6 +288,8 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  
 +    // Anland: 强制使用 LINEAR modifier 格式
 +    bool anlandFormatSet = false;
+     bool set10bit = false;
+ 
 +    if (isAnlandBackend(m_output)) {
 +        // 优先使用 ABGR8888 with LINEAR modifier
 +        m_output->state->setFormat(DRM_FORMAT_ABGR8888);
@@ -311,23 +313,17 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +
 +    // 只有在 Anland 格式未设置时才执行标准格式循环
 +    if (!anlandFormatSet) {
-+        bool set10bit = false;
--    bool set10bit = false;
- 
      for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
-@@ -691,6 +763,11 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -691,6 +762,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
-+        m_enabled10bit = set10bit;
-+    } else {
-+        // Anland 强制使用 8-bit
-+        m_enabled10bit = false;
-+    }
++}
++// 注意：set10bit 在 Anland 模式下保持 false
  
      m_enabled10bit = set10bit;
  
-@@ -2676,5 +2753,13 @@ bool CMonitor::useFP16() {
+@@ -2676,6 +2749,14 @@ bool CMonitor::useFP16() {
  PImageDescription CMonitor::workBufferImageDescription() {
      static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
  
@@ -341,11 +337,8 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +
      if (!useFP16() && !m_imageDescription->value().icc.present)
          return m_imageDescription;
- }
-diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp (CMonitorState 部分)
---- a/src/helpers/Monitor.cpp
-+++ b/src/helpers/Monitor.cpp
-@@ -2930,7 +2930,12 @@ CMonitorState::CMonitorState(CMonitor* owner) : m_owner(owner) {
+ 
+@@ -2930,7 +3001,12 @@ CMonitorState::CMonitorState(CMonitor* owner) : m_owner(owner) {
  }
  
  bool CMonitorState::updateSwapchain() {
@@ -358,7 +351,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp (CMonitorState �
      const auto& STATE   = m_owner->m_output->state->state();
      const auto& MODE    = STATE.mode ? STATE.mode : STATE.customMode;
      if (!MODE) {
-@@ -2942,11 +2948,17 @@ bool CMonitorState::updateSwapchain() {
+@@ -2942,6 +3018,11 @@ bool CMonitorState::updateSwapchain() {
  }
  
  void CMonitorState::ensureBufferPresent() {
@@ -370,12 +363,15 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp (CMonitorState �
      const auto& STATE = m_owner->m_output->state->state();
      if (!STATE.enabled) {
          Log::logger->log(Log::TRACE, "CMonitorState::ensureBufferPresent: Ignoring, monitor is not enabled");
-         return;
+@@ -2950,6 +3031,8 @@ void CMonitorState::ensureBufferPresent() {
      }
  
-+    const auto& OPTIONS = m_owner->m_output->swapchain->currentOptions();
      if (STATE.buffer) {
++        // 注意：Anland 模式下不会进入此函数，所以可以安全使用 swapchain
++        const auto& OPTIONS = m_owner->m_output->swapchain->currentOptions();
          if (const auto params = STATE.buffer->dmabuf(); params.success && params.format == m_owner->m_drmFormat)
+             return;
+     }
 diff --git a/src/main.cpp b/src/main.cpp
 --- a/src/main.cpp
 +++ b/src/main.cpp
@@ -441,7 +437,7 @@ diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
  
          g_pShaderLoader = std::move(shaderLoader);
  
-@@ -1110,6 +1116,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
+@@ -1110,6 +1115,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
  void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, const STextureRenderData& data) {
      RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
      RASSERT(tex, "Attempted to draw nullptr texture!");
