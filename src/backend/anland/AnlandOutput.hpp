@@ -16,15 +16,10 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl32.h>
-#include <GLES2/gl2ext.h>
 
 extern "C" {
 #include "display_producer.h"
 }
-
-// Forward declare EGL functions used for direct rendering
-extern PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR;
-extern PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR;
 
 namespace Aquamarine {
 
@@ -65,12 +60,12 @@ public:
     bool isInFallback() const { return m_inFallback; }
     void onBufferReady();
 
-    // For CAnlandAllocator (kept for compatibility but not used in direct rendering)
+    // Buffer management
     int getBufferCount() const { return m_bufferCount; }
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
     CSharedPointer<CBackend> getCBackend() const;
 
-    // EGL context management - public accessors
+    // EGL context management
     void setEGL(EGLDisplay dpy, EGLContext ctx);
     EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
     EGLContext getEGLContext() const { return m_eglContext; }
@@ -123,10 +118,7 @@ private:
     uint32_t m_refresh = 60000;
     uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
 
-    // Direct rendering: bypass swapchain for FBO stability
-    bool m_useDirectRendering = true;
-
-    // EGL context (private, accessed via getters/setters)
+    // EGL context
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     EGLContext m_eglContext = EGL_NO_CONTEXT;
 

@@ -3,19 +3,12 @@
 #include <unistd.h>
 #include <cstring>
 #include <drm_fourcc.h>
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
 
-// 定义日志宏
+// 日志宏
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_WARN(fmt, ...) do { fprintf(stderr, "[ANLAND][WARN] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERROR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERROR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
-
-// EGL function pointers for dmabuf import
-static PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = nullptr;
-static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = nullptr;
-static EGLDisplay g_eglDisplay = EGL_NO_DISPLAY;
 
 namespace Aquamarine {
 
@@ -52,12 +45,6 @@ CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info,
 CAnlandDmaBuffer::~CAnlandDmaBuffer() {
     ANLAND_DEBUG("CAnlandDmaBuffer destructor: fd=%d", m_fd);
     inUse = false;
-    
-    // Destroy EGL image if it exists
-    if (m_eglImage != EGL_NO_IMAGE_KHR && eglDestroyImageKHR && g_eglDisplay != EGL_NO_DISPLAY) {
-        eglDestroyImageKHR(g_eglDisplay, m_eglImage);
-        m_eglImage = EGL_NO_IMAGE_KHR;
-    }
     
     if (m_ownedFd >= 0) {
         close(m_ownedFd);
@@ -98,17 +85,6 @@ void CAnlandDmaBuffer::sendRelease() {
     ANLAND_DEBUG("sendRelease: fd=%d", m_fd);
     inUse = false;
     events.backendRelease.emit();
-}
-
-// Static function to set EGL display for EGL image creation
-void anland_set_egl_display(EGLDisplay display) {
-    g_eglDisplay = display;
-    if (display != EGL_NO_DISPLAY) {
-        eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-        eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
-        ANLAND_DEBUG("EGL display set, createImage=%p, destroyImage=%p", 
-                     (void*)eglCreateImageKHR, (void*)eglDestroyImageKHR);
-    }
 }
 
 } // namespace Aquamarine

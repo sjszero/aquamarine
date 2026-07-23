@@ -7,10 +7,6 @@
 #include <drm_fourcc.h>
 #include "display_producer.h"
 
-// Include EGL headers for EGLImage support
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-
 namespace Aquamarine {
 
 class CAnlandAllocator;
@@ -29,15 +25,13 @@ public:
     virtual eBufferType type() override { return BUFFER_TYPE_DMABUF; }
     virtual void update(const Hyprutils::Math::CRegion& damage) override {}
     virtual bool isSynchronous() override { return false; }
-    virtual bool good() override { return m_fd >= 0; }  // Remove EGLImage check for now
+    virtual bool good() override { return m_fd >= 0; }
     virtual SDMABUFAttrs dmabuf() override;
     virtual SSHMAttrs shm() override { return SSHMAttrs{}; }
     virtual std::tuple<uint8_t*, uint32_t, size_t> beginDataPtr(uint32_t flags) override { return {nullptr, 0, 0}; }
     virtual void endDataPtr() override {}
     virtual void sendRelease() override;
 
-    // EGL image for direct rendering (optional, used by output)
-    EGLImageKHR m_eglImage = EGL_NO_IMAGE_KHR;
     bool inUse = false;
 
 private:
