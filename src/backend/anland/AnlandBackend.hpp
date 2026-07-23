@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <xf86drm.h>
 #include <functional>
+#include <deque>
+#include <chrono>
 
 extern "C" {
 #include "display_producer.h"
@@ -31,13 +33,11 @@ class CAnlandTouch;
 
 /**
  * 剪贴板回调类型 - 由 Hyprland 端注册
- * @param text UTF-8 编码的剪贴板文本
  */
 using ClipboardCallback = std::function<void(const std::string& text)>;
 
 /**
  * 文本输入回调类型 - 由 Hyprland 端注册
- * @param text UTF-8 编码的输入文本
  */
 using TextInputCallback = std::function<void(const std::string& text)>;
 
@@ -85,8 +85,22 @@ public:
     void shutdown();
 
     // 注册回调函数（由 Hyprland 端调用）
-    void setClipboardCallback(ClipboardCallback cb) { m_clipboardCallback = std::move(cb); }
-    void setTextInputCallback(TextInputCallback cb) { m_textInputCallback = std::move(cb); }
+    void setClipboardCallback(ClipboardCallback cb) { 
+        std::lock_guard<std::mutex> lock(m_callbackMutex);
+        m_clipboardCallback = std::move(cb); 
+    }
+    void setTextInputCallback(TextInputCallback cb) { 
+        std::lock_guard<std::mutex> lock(m_callbackMutex);
+        m_textInputCallback = std::move(cb); 
+    }
+
+    // IME 延迟重绘支持
+    void deferFrameForIME();
+    bool hasDeferredIME() const { return m_imeDeferred; }
+    void clearDeferredIME() { m_imeDeferred = false; }
+
+    // 获取当前时间 (ms)
+    static uint32_t getCurrentTimeMs();
 
     CWeakPointer<CAnlandBackend> self;
 
@@ -103,6 +117,12 @@ private:
     void updateCameraResources();
     void updateClipboard(const InputEvent& ev);
     void updateTextInput(const InputEvent& ev);
+    void processPointerMotion(const InputEvent& ev);
+    void processPointerButton(const InputEvent& ev);
+    void processPointerAxis(const InputEvent& ev);
+    void processKey(const InputEvent& ev);
+    void processTouch(const InputEvent& ev);
+    void processDisplayRefresh(const InputEvent& ev);
 
     int openDummyDRM();
 
@@ -135,12 +155,37 @@ private:
     std::atomic<bool> m_destroying{false};
     std::atomic<bool> m_shutdownDone{false};
 
-    // 回调函数 - 由 Hyprland 端注册
+    // 回调函数 - 由 Hyprland 端注册，带锁保护
+    std::mutex m_callbackMutex;
     ClipboardCallback m_clipboardCallback;
     TextInputCallback m_textInputCallback;
 
     // 剪贴板去重
     std::string m_lastClipboardText;
+    
+    // IME 延迟重绘
+    std::atomic<bool> m_imeDeferred{false};
+    std::chrono::steady_clock::time_point m_imeDeferDeadline;
+    CSharedPointer<CEventLoopTimer> m_imeDeferTimer;
+
+    // Touch 状态跟踪 (用于手势识别)
+    struct TouchPoint {
+        int32_t id;
+        Vector2D pos;
+        bool active;
+    };
+    std::array<TouchPoint, 16> m_touchPoints;
+    std::mutex m_touchMutex;
+    
+    // 触摸手势识别 (简化版三/四指滑动)
+    struct GestureState {
+        bool active = false;
+        int fingers = 0;
+        Vector2D startPos;
+        Vector2D lastPos;
+        Vector2D accumDelta;
+        bool swipeMode = false;
+    } m_gesture;
 };
 
 } // namespace Aquamarine

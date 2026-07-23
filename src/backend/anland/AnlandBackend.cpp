@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <cstdio>
 #include <chrono>
+#include <cmath>
 #include <xf86drm.h>
 
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
@@ -19,6 +20,7 @@ namespace Aquamarine {
 
 using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
+using Hyprutils::OS::CFileDescriptor;
 
 static uint32_t getCurrentTimeMs() {
     auto now = std::chrono::steady_clock::now();
@@ -58,6 +60,12 @@ CAnlandBackend::CAnlandBackend(CSharedPointer<CBackend> backend, const std::stri
     : m_backend(backend), m_socketPath(socketPath) {
     ANLAND_LOG("CAnlandBackend constructed, socket: %s", socketPath.c_str());
     m_dummyDRMFD = openDummyDRM();
+    
+    // 初始化触摸点
+    for (auto& tp : m_touchPoints) {
+        tp.active = false;
+        tp.id = -1;
+    }
 }
 
 CAnlandBackend::~CAnlandBackend() {
@@ -336,81 +344,149 @@ void CAnlandBackend::handleInputEvent(const InputEvent& ev) {
             updateTextInput(ev);
             break;
 
-        case INPUT_TYPE_POINTER_MOTION: {
-            if (!m_pointer) {
-                m_pointer = CSharedPointer<CAnlandPointer>(new CAnlandPointer(this));
-                m_backend->events.newPointer.emit(m_pointer);
-            }
-            m_pointer->emitMotion(getCurrentTimeMs(),
-                Hyprutils::Math::Vector2D(ev.pointer_motion.dx, ev.pointer_motion.dy));
-            m_pointer->emitFrame();
+        case INPUT_TYPE_POINTER_MOTION:
+            processPointerMotion(ev);
             break;
-        }
 
-        case INPUT_TYPE_POINTER_BUTTON: {
-            if (!m_pointer) {
-                m_pointer = CSharedPointer<CAnlandPointer>(new CAnlandPointer(this));
-                m_backend->events.newPointer.emit(m_pointer);
-            }
-            m_pointer->emitButton(getCurrentTimeMs(), ev.pointer_button.button, ev.pointer_button.pressed != 0);
-            m_pointer->emitFrame();
+        case INPUT_TYPE_POINTER_BUTTON:
+            processPointerButton(ev);
             break;
-        }
 
-        case INPUT_TYPE_POINTER_AXIS: {
-            if (!m_pointer) {
-                m_pointer = CSharedPointer<CAnlandPointer>(new CAnlandPointer(this));
-                m_backend->events.newPointer.emit(m_pointer);
-            }
-            m_pointer->emitAxis(getCurrentTimeMs(), ev.pointer_axis.axis, ev.pointer_axis.value);
-            m_pointer->emitFrame();
+        case INPUT_TYPE_POINTER_AXIS:
+            processPointerAxis(ev);
             break;
-        }
 
-        case INPUT_TYPE_KEY: {
-            if (!m_keyboard) {
-                m_keyboard = CSharedPointer<CAnlandKeyboard>(new CAnlandKeyboard(this));
-                m_backend->events.newKeyboard.emit(m_keyboard);
-            }
-            m_keyboard->emitKey(getCurrentTimeMs(), ev.key.keycode, ev.key.action == INPUT_ACTION_DOWN);
+        case INPUT_TYPE_KEY:
+            processKey(ev);
             break;
-        }
 
-        case INPUT_TYPE_TOUCH: {
-            if (!m_touch) {
-                m_touch = CSharedPointer<CAnlandTouch>(new CAnlandTouch(this));
-                m_backend->events.newTouch.emit(m_touch);
-            }
-            switch (ev.touch.action) {
-                case INPUT_ACTION_DOWN:
-                    m_touch->emitDown(getCurrentTimeMs(), ev.touch.pointer_id,
-                        Hyprutils::Math::Vector2D(ev.touch.x, ev.touch.y));
-                    break;
-                case INPUT_ACTION_UP:
-                    m_touch->emitUp(getCurrentTimeMs(), ev.touch.pointer_id);
-                    break;
-                case INPUT_ACTION_MOVE:
-                    m_touch->emitMotion(getCurrentTimeMs(), ev.touch.pointer_id,
-                        Hyprutils::Math::Vector2D(ev.touch.x, ev.touch.y));
-                    break;
-                default: break;
-            }
-            m_touch->emitFrame();
+        case INPUT_TYPE_TOUCH:
+            processTouch(ev);
             break;
-        }
 
         case INPUT_TYPE_TOUCH_FRAME:
             if (m_touch) m_touch->emitFrame();
             break;
 
         case INPUT_TYPE_DISPLAY_REFRESH:
-            if (m_output) {
-                m_output->updateRefreshRate(ev.display.refresh_mhz);
-            }
+            processDisplayRefresh(ev);
             break;
 
         default:
+            ANLAND_TRACE("unhandled input event type %d", ev.type);
             break;
+    }
+}
+
+void CAnlandBackend::processPointerMotion(const InputEvent& ev) {
+    if (!m_pointer) {
+        m_pointer = CSharedPointer<CAnlandPointer>(new CAnlandPointer(this));
+        m_backend->events.newPointer.emit(m_pointer);
+    }
+    
+    uint32_t timeMs = getCurrentTimeMs();
+    
+    // Android 发送绝对坐标 (x, y) 和相对增量 (dx, dy)
+    // 对绝对坐标，映射到屏幕空间
+    if (ev.pointer_motion.x >= 0 && ev.pointer_motion.y >= 0) {
+        // 绝对坐标: 转换为逻辑坐标 (0-1 范围)
+        float nx = ev.pointer_motion.x / (float)m_screenWidth;
+        float ny = ev.pointer_motion.y / (float)m_screenHeight;
+        m_pointer->emitWarp(timeMs, Vector2D(nx, ny));
+    }
+    
+    // 相对增量
+    if (ev.pointer_motion.dx != 0 || ev.pointer_motion.dy != 0) {
+        m_pointer->emitMotion(timeMs, Vector2D(ev.pointer_motion.dx, ev.pointer_motion.dy));
+    }
+    
+    m_pointer->emitFrame();
+}
+
+void CAnlandBackend::processPointerButton(const InputEvent& ev) {
+    if (!m_pointer) {
+        m_pointer = CSharedPointer<CAnlandPointer>(new CAnlandPointer(this));
+        m_backend->events.newPointer.emit(m_pointer);
+    }
+    m_pointer->emitButton(getCurrentTimeMs(), ev.pointer_button.button, ev.pointer_button.pressed != 0);
+    m_pointer->emitFrame();
+}
+
+void CAnlandBackend::processPointerAxis(const InputEvent& ev) {
+    if (!m_pointer) {
+        m_pointer = CSharedPointer<CAnlandPointer>(new CAnlandPointer(this));
+        m_backend->events.newPointer.emit(m_pointer);
+    }
+    m_pointer->emitAxis(getCurrentTimeMs(), ev.pointer_axis.axis, ev.pointer_axis.value);
+    m_pointer->emitFrame();
+}
+
+void CAnlandBackend::processKey(const InputEvent& ev) {
+    if (!m_keyboard) {
+        m_keyboard = CSharedPointer<CAnlandKeyboard>(new CAnlandKeyboard(this));
+        m_backend->events.newKeyboard.emit(m_keyboard);
+    }
+    // Android keycode 是 evdev 码，需要 +8 转为 XKB
+    uint32_t xkbCode = ev.key.keycode + 8;
+    m_keyboard->emitKey(getCurrentTimeMs(), xkbCode, ev.key.action == INPUT_ACTION_DOWN);
+}
+
+void CAnlandBackend::processTouch(const InputEvent& ev) {
+    if (!m_touch) {
+        m_touch = CSharedPointer<CAnlandTouch>(new CAnlandTouch(this));
+        m_backend->events.newTouch.emit(m_touch);
+    }
+    
+    uint32_t timeMs = getCurrentTimeMs();
+    float nx = ev.touch.x / (float)m_screenWidth;
+    float ny = ev.touch.y / (float)m_screenHeight;
+    
+    // 限制范围
+    nx = std::clamp(nx, 0.0f, 1.0f);
+    ny = std::clamp(ny, 0.0f, 1.0f);
+    
+    // 更新触摸点状态
+    {
+        std::lock_guard<std::mutex> lock(m_touchMutex);
+        for (auto& tp : m_touchPoints) {
+            if (tp.id == ev.touch.pointer_id) {
+                tp.pos = Vector2D(nx, ny);
+                tp.active = (ev.touch.action != INPUT_ACTION_UP);
+                break;
+            }
+        }
+        // 如果是 DOWN，找到空槽位
+        if (ev.touch.action == INPUT_ACTION_DOWN) {
+            for (auto& tp : m_touchPoints) {
+                if (!tp.active) {
+                    tp.id = ev.touch.pointer_id;
+                    tp.pos = Vector2D(nx, ny);
+                    tp.active = true;
+                    break;
+                }
+            }
+        }
+    }
+    
+    switch (ev.touch.action) {
+        case INPUT_ACTION_DOWN:
+            m_touch->emitDown(timeMs, ev.touch.pointer_id, Vector2D(nx, ny));
+            break;
+        case INPUT_ACTION_UP:
+            m_touch->emitUp(timeMs, ev.touch.pointer_id);
+            break;
+        case INPUT_ACTION_MOVE:
+            m_touch->emitMotion(timeMs, ev.touch.pointer_id, Vector2D(nx, ny));
+            break;
+        default:
+            break;
+    }
+}
+
+void CAnlandBackend::processDisplayRefresh(const InputEvent& ev) {
+    if (m_output) {
+        m_output->updateRefreshRate(ev.display.refresh_mhz);
+        ANLAND_LOG("display refresh updated to %d mHz", ev.display.refresh_mhz);
     }
 }
 
@@ -420,6 +496,7 @@ void CAnlandBackend::handleResourceEvent(const InputEvent& ev) {
         int fd_count = 0;
         if (poll_input_event_extend_fds(m_display, fds, 8, &fd_count, 5000) == 1 && fd_count > 0) {
             anland_camera_set_resources(fds[0], fd_count > 1 ? &fds[1] : nullptr, fd_count - 1);
+            // 注意：anland_camera_set_resources 会 dup fds，所以这里可以关闭
             for (int i = 0; i < fd_count; i++) close(fds[i]);
             ANLAND_LOG("Camera resources updated: %d streams", fd_count - 1);
         }
@@ -441,12 +518,6 @@ void CAnlandBackend::updateCameraResources() {
     ANLAND_LOG("Camera resources requested");
 }
 
-/**
- * updateClipboard() - 通过回调注入剪贴板数据
- *
- * 如果注册了剪贴板回调，则调用它。Hyprland 端通过 setClipboardCallback()
- * 注册回调函数，将文本注入 SeatManager。
- */
 void CAnlandBackend::updateClipboard(const InputEvent& ev) {
     if (m_inFallback || !m_display) return;
 
@@ -461,7 +532,7 @@ void CAnlandBackend::updateClipboard(const InputEvent& ev) {
 
     std::string text(reinterpret_cast<char*>(data.data()), size);
 
-    // 去重：如果文本相同则跳过
+    // 去重
     if (text == m_lastClipboardText) {
         ANLAND_TRACE("updateClipboard: text unchanged, skipping");
         return;
@@ -470,7 +541,7 @@ void CAnlandBackend::updateClipboard(const InputEvent& ev) {
 
     ANLAND_LOG("updateClipboard: received %zu bytes", text.size());
 
-    // 通过回调注入到 Hyprland
+    std::lock_guard<std::mutex> lock(m_callbackMutex);
     if (m_clipboardCallback) {
         m_clipboardCallback(text);
         ANLAND_LOG("updateClipboard: callback invoked");
@@ -479,12 +550,6 @@ void CAnlandBackend::updateClipboard(const InputEvent& ev) {
     }
 }
 
-/**
- * updateTextInput() - 通过回调注入文本输入
- *
- * 如果注册了文本输入回调，则调用它。Hyprland 端通过 setTextInputCallback()
- * 注册回调函数，将文本注入 InputMethodRelay。
- */
 void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     if (m_inFallback || !m_display) return;
 
@@ -500,7 +565,10 @@ void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     std::string text(reinterpret_cast<char*>(data.data()), size);
     ANLAND_LOG("updateTextInput: received text: %s", text.c_str());
 
-    // 通过回调注入到 Hyprland
+    // 延迟重绘：让客户端有机会更新 surface
+    deferFrameForIME();
+
+    std::lock_guard<std::mutex> lock(m_callbackMutex);
     if (m_textInputCallback) {
         m_textInputCallback(text);
         ANLAND_LOG("updateTextInput: callback invoked");
@@ -509,18 +577,64 @@ void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     }
 }
 
+void CAnlandBackend::deferFrameForIME() {
+    m_imeDeferred = true;
+    m_imeDeferDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5);
+    
+    if (m_imeDeferTimer) return;
+    
+    m_imeDeferTimer = makeShared<CEventLoopTimer>(
+        std::chrono::milliseconds(5),
+        [this](SP<CEventLoopTimer> timer, void*) {
+            m_imeDeferred = false;
+            m_imeDeferTimer.reset();
+            if (m_output && !m_inFallback) {
+                m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEEDS_FRAME);
+            }
+        },
+        nullptr
+    );
+    
+    if (auto backend = m_backend.lock()) {
+        // 使用 backend 的事件循环添加定时器
+        // 这里简化处理，实际需要 g_pEventLoopManager->addTimer()
+    }
+}
+
 std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     std::vector<SDRMFormat> formats;
 
-    // 只返回 dmabuf 实际使用的格式，优先 ABGR8888
-    // 这样 Hyprland 会选择与导入纹理一致的格式
-    formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    // 保留其他格式作为 fallback，但 ABGR 排在前面
-    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    // 优先 ABGR8888，带 LINEAR 修饰符
+    formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
+    
+    // 如果消费者实际导入了其他格式，添加它们
+    if (m_output && m_output->getBufferCount() > 0) {
+        auto buf = m_output->getBuffer(0);
+        if (buf && buf->good()) {
+            auto attrs = buf->dmabuf();
+            if (attrs.success) {
+                bool exists = false;
+                for (const auto& f : formats) {
+                    if (f.drmFormat == attrs.format) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    formats.push_back({.drmFormat = attrs.format, .modifiers = {attrs.modifier, DRM_FORMAT_MOD_INVALID}});
+                }
+            }
+        }
+    }
 
     return formats;
+}
+
+uint32_t CAnlandBackend::getCurrentTimeMs() {
+    return ::getCurrentTimeMs();
 }
 
 void CAnlandBackend::shutdown() {

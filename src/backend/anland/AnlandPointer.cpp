@@ -22,6 +22,13 @@ void CAnlandPointer::emitMotion(uint32_t timeMs, const Hyprutils::Math::Vector2D
     events.move.emit(ev);
 }
 
+void CAnlandPointer::emitWarp(uint32_t timeMs, const Hyprutils::Math::Vector2D& absolute) {
+    IPointer::SWarpEvent ev;
+    ev.timeMs = timeMs;
+    ev.absolute = absolute;
+    events.warp.emit(ev);
+}
+
 void CAnlandPointer::emitButton(uint32_t timeMs, uint32_t button, bool pressed) {
     IPointer::SButtonEvent ev;
     ev.timeMs = timeMs;

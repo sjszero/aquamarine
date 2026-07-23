@@ -13,11 +13,6 @@ class CAnlandAllocator;
 
 /**
  * Anland DMA buffer - wraps a dmabuf fd from the Android display daemon
- *
- * Supports:
- * - DRM modifiers (compressed textures)
- * - Multiple formats (8-bit, 10-bit, FP16)
- * - Buffer release signaling
  */
 class CAnlandDmaBuffer : public IBuffer {
 public:

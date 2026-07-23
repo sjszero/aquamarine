@@ -26,6 +26,7 @@ namespace Aquamarine {
 
 using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
+using Hyprutils::Math::CRegion;
 
 class CAnlandBackend;
 class CAnlandDmaBuffer;
@@ -40,13 +41,13 @@ public:
     virtual bool test() override;
     virtual CSharedPointer<IBackendImplementation> getBackend() override;
     virtual std::vector<SDRMFormat> getRenderFormats() override;
-    virtual bool pendingPageFlip() override { return m_framePending; }
+    virtual bool pendingPageFlip() override { return m_framePending.load(); }
     virtual void scheduleFrame(const scheduleFrameReason reason = AQ_SCHEDULE_UNKNOWN) override;
     virtual size_t getGammaSize() override { return 256; }
     virtual size_t getDeGammaSize() override { return 0; }
     virtual bool destroy() override { return false; }
 
-    // Cursor
+    // Cursor (software, no hw cursor support)
     virtual bool setCursor(CSharedPointer<IBuffer> buffer, const Hyprutils::Math::Vector2D& hotspot) override { return false; }
     virtual void moveCursor(const Hyprutils::Math::Vector2D& coord, bool skipSchedule = false) override {}
     virtual void setCursorVisible(bool visible) override {}
@@ -68,8 +69,18 @@ public:
 
     // EGL 上下文管理
     void setEGL(EGLDisplay dpy, EGLContext ctx) { 
+        std::lock_guard<std::mutex> lock(m_eglMutex);
         m_eglDisplay = dpy; 
         m_eglContext = ctx; 
+    }
+
+    // 获取当前使用的 EGL 上下文（线程安全）
+    bool getEGL(EGLDisplay& dpy, EGLContext& ctx) {
+        std::lock_guard<std::mutex> lock(m_eglMutex);
+        if (m_eglDisplay == EGL_NO_DISPLAY || m_eglContext == EGL_NO_CONTEXT) return false;
+        dpy = m_eglDisplay;
+        ctx = m_eglContext;
+        return true;
     }
 
     void* getImageDescription() const { return m_imageDescription; }
@@ -84,8 +95,10 @@ private:
     void destroyBuffer(int index);
     void importBuffers();
     void updateMode(uint32_t width, uint32_t height, uint32_t format);
+    void ensureEGLContext();
+    bool createRenderFence(int& fenceFd);
 
-    // 损伤跟踪
+    // 损伤跟踪 - 线程安全
     struct BufferSlot {
         int fd = -1;
         uint32_t width = 0, height = 0;
@@ -98,7 +111,10 @@ private:
         bool imported = false;
         bool inUse = false;
         bool hasDamage = true;
-        Hyprutils::Math::CRegion accumDamage;
+        CRegion accumDamage;
+        
+        // 用于同步
+        std::mutex mutex;
     };
 
     std::array<BufferSlot, MAX_BUFS> m_slots;
@@ -120,7 +136,8 @@ private:
     uint32_t m_refresh = 60000;
     uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
 
-    // EGL 上下文
+    // EGL 上下文 - 线程安全
+    std::mutex m_eglMutex;
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     EGLContext m_eglContext = EGL_NO_CONTEXT;
 

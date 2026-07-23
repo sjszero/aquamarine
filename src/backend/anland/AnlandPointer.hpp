@@ -18,6 +18,7 @@ public:
     virtual libinput_device* getLibinputHandle() override { return nullptr; }
 
     void emitMotion(uint32_t timeMs, const Hyprutils::Math::Vector2D& delta);
+    void emitWarp(uint32_t timeMs, const Hyprutils::Math::Vector2D& absolute);
     void emitButton(uint32_t timeMs, uint32_t button, bool pressed);
     void emitAxis(uint32_t timeMs, uint32_t axis, double value);
     void emitFrame();

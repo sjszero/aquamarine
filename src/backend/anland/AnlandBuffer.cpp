@@ -13,7 +13,7 @@ CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info,
                                    uint32_t drmFormat, uint64_t modifier)
     : m_info(info), m_drmFormat(drmFormat), m_modifier(modifier) {
     
-    // 确保 LINEAR 修饰符被正确使用
+    // 确保有效的修饰符
     if (m_modifier == DRM_FORMAT_MOD_INVALID || m_modifier == 0) {
         m_modifier = DRM_FORMAT_MOD_LINEAR;
     }
@@ -27,7 +27,7 @@ CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info,
     m_fd = m_ownedFd;
     size = { (float)info.width, (float)info.height };
     opaque = true;
-    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d, size=%dx%d, drm_fmt=0x%x, modifier=0x%lx (LINEAR forced)",
+    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d, size=%dx%d, drm_fmt=0x%x, modifier=0x%lx",
                  m_fd, info.width, info.height, drmFormat, m_modifier);
 }
 
@@ -53,7 +53,7 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
     attrs.success = true;
     attrs.size = size;
     attrs.format = m_drmFormat;
-    attrs.modifier = m_modifier;  // 使用修复后的修饰符
+    attrs.modifier = m_modifier;
     attrs.planes = 1;
     attrs.fds[0] = m_fd;
     attrs.offsets[0] = m_info.offset;
