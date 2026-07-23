@@ -384,23 +384,21 @@ diff --git a/src/main.cpp b/src/main.cpp
      if (!ignoreSudo && NInit::isSudo()) {
          std::println(stderr,
                       "[ ERROR ] Hyprland was launched with superuser privileges, but the privileges check is not omitted.\n"
-diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
 --- a/src/render/OpenGL.cpp
 +++ b/src/render/OpenGL.cpp
-@@ -975,7 +975,13 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
-     RASSERT(m_proc.eglCreateSyncKHR, "Display driver doesn't support eglCreateSyncKHR");
-     RASSERT(m_proc.eglDupNativeFenceFDANDROID, "Display driver doesn't support eglDupNativeFenceFDANDROID");
-     RASSERT(m_proc.eglWaitSyncKHR, "Display driver doesn't support eglWaitSyncKHR");
+@@ -975,6 +975,11 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
+         shaders->TEXVERTSRC    = shaderLoader->process("tex300.vert");
+         shaders->TEXVERTSRC320 = shaderLoader->process("tex320.vert");
  
-+    // Anland: 强制禁用颜色管理，避免因 ImageDescription 缺失导致崩溃
-+    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
-+        m_cmSupported = false;
-+    } else {
-+        m_cmSupported = *PCM;
-+    }
-     if (EGLEXTENSIONS.contains("EGL_EXT_device_base") || EGLEXTENSIONS.contains("EGL_EXT_device_enumeration"))
-         loadGLProc(&m_proc.eglQueryDevicesEXT, "eglQueryDevicesEXT");
+-        m_cmSupported = *PCM;
++        // Anland: 强制禁用颜色管理，避免因 ImageDescription 缺失导致崩溃
++        if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++            m_cmSupported = false;
++        } else {
++            m_cmSupported = *PCM;
++        }
  
+         g_pShaderLoader = std::move(shaderLoader);
 @@ -1110,6 +1116,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
  void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, const STextureRenderData& data) {
      RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
