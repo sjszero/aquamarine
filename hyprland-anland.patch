@@ -87,7 +87,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      m_aqBackend = CBackend::create(implementations, options);
  
-@@ -562,6 +595,62 @@ void CCompositor::initAllSignals() {
+@@ -562,6 +595,57 @@ void CCompositor::initAllSignals() {
          });
      }
  }
@@ -134,12 +134,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +                Log::logger->log(Log::WARN, "Anland: Explicit sync NOT supported, falling back to glFinish");
 +            }
 +
-+            // 禁用颜色管理以避免 shader 问题
-+            Log::logger->log(Log::DEBUG, "Anland: Color management disabled for Anland backend");
-+
 +            Log::logger->log(Log::DEBUG, "Anland: EGL context passed to Anland backend");
-+
-+            // 只需要传递给第一个 Anland 后端
 +            break;
 +        }
 +    }
@@ -150,7 +145,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,6 +714,14 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,6 +710,14 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
@@ -165,7 +160,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
              Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
              g_pHyprCtl = makeUnique<CHyprCtl>();
  
-@@ -1064,6 +1161,13 @@ void CCompositor::createLockFile() {
+@@ -1064,6 +1157,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {
      const auto PATH = m_instancePath + "/hyprland.lock";
@@ -179,7 +174,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      if (std::filesystem::exists(PATH))
          std::filesystem::remove(PATH);
-@@ -1092,6 +1196,10 @@ void CCompositor::cleanup() {
+@@ -1092,6 +1192,10 @@ void CCompositor::cleanup() {
  
      m_isShuttingDown = true;
  
@@ -394,18 +389,17 @@ diff --git a/src/main.cpp b/src/main.cpp
 diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
 --- a/src/render/OpenGL.cpp
 +++ b/src/render/OpenGL.cpp
-@@ -975,7 +975,14 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
+@@ -975,7 +975,13 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
      RASSERT(m_proc.eglCreateSyncKHR, "Display driver doesn't support eglCreateSyncKHR");
      RASSERT(m_proc.eglDupNativeFenceFDANDROID, "Display driver doesn't support eglDupNativeFenceFDANDROID");
      RASSERT(m_proc.eglWaitSyncKHR, "Display driver doesn't support eglWaitSyncKHR");
  
-+        // Anland: 强制禁用颜色管理，避免因 ImageDescription 缺失导致崩溃
-+        // 在 Anland 后端中，颜色管理由后端处理
-+        if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
-+            m_cmSupported = false;
-+        } else {
-+            m_cmSupported = *PCM;
-+        }
++    // Anland: 强制禁用颜色管理，避免因 ImageDescription 缺失导致崩溃
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++        m_cmSupported = false;
++    } else {
++        m_cmSupported = *PCM;
++    }
      if (EGLEXTENSIONS.contains("EGL_EXT_device_base") || EGLEXTENSIONS.contains("EGL_EXT_device_enumeration"))
          loadGLProc(&m_proc.eglQueryDevicesEXT, "eglQueryDevicesEXT");
  
@@ -426,7 +420,7 @@ diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
 diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
 --- a/src/render/OpenGL.hpp
 +++ b/src/render/OpenGL.hpp
-@@ -68,6 +68,12 @@ namespace Render::GL {
+@@ -68,6 +68,11 @@ namespace Render::GL {
          EGLDisplay                     m_eglDisplay = nullptr;
          EGLDeviceEXT                   m_eglDevice  = nullptr;
  
@@ -434,7 +428,6 @@ diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
 +        EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
 +        EGLContext getEGLContext() const { return m_eglContext; }
 +        bool explicitSyncSupported() const { return m_exts.EGL_ANDROID_native_fence_sync_ext; }
-+        bool isNvidia() const { return m_nvidia; }
 +
          std::map<PHLMONITORREF, SP<IFramebuffer>> m_monitorBGFBs;
  
@@ -442,12 +435,11 @@ diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
 diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
 --- a/src/render/Renderer.cpp
 +++ b/src/render/Renderer.cpp
-@@ -2444,6 +2444,15 @@ CHyprColor IHyprRenderer::getConvertedColor(const CHyprColor& color) {
+@@ -2444,6 +2444,14 @@ CHyprColor IHyprRenderer::getConvertedColor(const CHyprColor& color) {
      const auto DESCR = m_renderData.currentFB ? m_renderData.currentFB->imageDescription() : workBufferImageDescription();
  
      if (!DESCR) {
 +        // Anland 后端：如果没有 ImageDescription，直接返回原始颜色
-+        // 这避免了因颜色管理缺失导致的崩溃
 +        if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
 +            Log::logger->log(Log::WARN, "getConvertedColor: no image description for Anland, returning raw color");
 +            return color;
