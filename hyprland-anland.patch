@@ -288,8 +288,6 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  
 +    // Anland: 强制使用 LINEAR modifier 格式
 +    bool anlandFormatSet = false;
-     bool set10bit = false;
- 
 +    if (isAnlandBackend(m_output)) {
 +        // 优先使用 ABGR8888 with LINEAR modifier
 +        m_output->state->setFormat(DRM_FORMAT_ABGR8888);
@@ -313,17 +311,19 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +
 +    // 只有在 Anland 格式未设置时才执行标准格式循环
 +    if (!anlandFormatSet) {
+     bool set10bit = false;
+ 
      for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
-@@ -691,6 +762,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -691,6 +763,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
-+}
-+// 注意：set10bit 在 Anland 模式下保持 false
++    }
++    // 注意：set10bit 在 Anland 模式下保持 false
  
      m_enabled10bit = set10bit;
  
-@@ -2676,6 +2749,14 @@ bool CMonitor::useFP16() {
+@@ -2676,6 +2750,14 @@ bool CMonitor::useFP16() {
  PImageDescription CMonitor::workBufferImageDescription() {
      static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
  
@@ -338,7 +338,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      if (!useFP16() && !m_imageDescription->value().icc.present)
          return m_imageDescription;
  
-@@ -2930,7 +3001,12 @@ CMonitorState::CMonitorState(CMonitor* owner) : m_owner(owner) {
+@@ -2930,7 +3002,12 @@ CMonitorState::CMonitorState(CMonitor* owner) : m_owner(owner) {
  }
  
  bool CMonitorState::updateSwapchain() {
@@ -351,7 +351,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const auto& STATE   = m_owner->m_output->state->state();
      const auto& MODE    = STATE.mode ? STATE.mode : STATE.customMode;
      if (!MODE) {
-@@ -2942,6 +3018,11 @@ bool CMonitorState::updateSwapchain() {
+@@ -2942,6 +3019,11 @@ bool CMonitorState::updateSwapchain() {
  }
  
  void CMonitorState::ensureBufferPresent() {
@@ -363,7 +363,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const auto& STATE = m_owner->m_output->state->state();
      if (!STATE.enabled) {
          Log::logger->log(Log::TRACE, "CMonitorState::ensureBufferPresent: Ignoring, monitor is not enabled");
-@@ -2950,6 +3031,8 @@ void CMonitorState::ensureBufferPresent() {
+@@ -2950,6 +3032,8 @@ void CMonitorState::ensureBufferPresent() {
      }
  
      if (STATE.buffer) {
@@ -484,6 +484,41 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
          Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
          return color;
      }
+diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp (beginRender 修改)
+--- a/src/render/Renderer.cpp
++++ b/src/render/Renderer.cpp
+@@ -2300,6 +2300,22 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
+     if (m_renderMode == RENDER_MODE_FULL_FAKE)
+         return beginFullFakeRenderInternal(pMonitor, damage, fb, simple);
+ 
++    // Anland: 跳过 swapchain，直接从 state 获取缓冲区
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++        // 检查后端是否为 Anland
++        auto backend = pMonitor->m_output->getBackend();
++        if (backend && backend->type() == Aquamarine::AQ_BACKEND_ANLAND) {
++            m_currentBuffer = pMonitor->m_output->state->state().buffer;
++            if (!m_currentBuffer) {
++                Log::logger->log(Log::ERR, "Anland: no buffer in state for {}", pMonitor->m_name);
++                return false;
++            }
++            // 跳过 swapchain 逻辑，直接进行后续渲染
++            goto anland_buffer_ready;
++        }
++    }
++
++    // 标准路径：从 swapchain 获取缓冲区
+     int bufferAge = 0;
+ 
+     if (!buffer) {
+@@ -2314,6 +2330,8 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
+     } else
+         m_currentBuffer = buffer;
+ 
++anland_buffer_ready:
++
+     initRender();
+ 
+     if (!initRenderBuffer(m_currentBuffer, pMonitor->m_output->state->state().drmFormat)) {
 diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
 --- a/src/render/pass/Pass.cpp
 +++ b/src/render/pass/Pass.cpp
