@@ -268,6 +268,20 @@ diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
  
          g_pShaderLoader = std::move(shaderLoader);
  
+@@ -1110,6 +1112,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
+ void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, const STextureRenderData& data) {
+     RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
+     RASSERT(tex, "Attempted to draw nullptr texture!");
++
++    // Anland: 如果纹理无效，直接返回避免崩溃
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0 && !tex->ok()) {
++        Log::logger->log(Log::WARN, "Anland: skipping invalid texture render");
++        return;
++    }
++
+     RASSERT(tex->ok(), "Attempted to draw invalid texture!");
+ 
+     TRACY_GPU_ZONE("RenderTextureInternalWithDamage");
 diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
 --- a/src/render/Renderer.cpp
 +++ b/src/render/Renderer.cpp
@@ -298,7 +312,8 @@ diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
  #include "../../desktop/view/WLSurface.hpp"
  #include "../../managers/SeatManager.hpp"
  #include "../../managers/eventLoop/EventLoopManager.hpp"
-@@ -54,5 +55,14 @@ void CRenderPass::add(UP<IPassElement>&& el) {
+@@ -53,6 +54,15 @@ void CRenderPass::add(UP<IPassElement>&& el) {
+ 
  void CRenderPass::simplify(bool willBlur, const CRegion& liveBlurRegion) {
      const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
 +
@@ -328,6 +343,31 @@ diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
      // single pass: cache blur results and gather aggregate info
      bool    willBlur = false, willDisableSimplification = false, willPrecomputeBlur = false;
      CRegion blurRegion;
+@@ -191,6 +210,14 @@ CRegion CRenderPass::render(const CRegion& damage_) {
+     } else
+         g_pHyprRenderer->m_renderData.finalDamage = m_damage;
+ 
++    // Anland: 如果 noSimplify 为 true，跳过 simplify
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++        // 已经在 simplify 中处理了，但为了确保，强制设置 noSimplify
++        g_pHyprRenderer->m_renderData.noSimplify = true;
++        // 直接跳过 simplify 调用
++        goto after_simplify;
++    }
++
+     if (g_pHyprRenderer->m_renderData.noSimplify || willDisableSimplification) {
+         for (auto& el : m_passElements) {
+             el->elementDamage = m_damage;
+@@ -198,8 +225,9 @@ CRegion CRenderPass::render(const CRegion& damage_) {
+     } else
+         simplify(willBlur, liveBlurRegion);
+ 
++after_simplify:
+     if (g_pHyprRenderer->m_renderData.pMonitor)
+         g_pHyprRenderer->m_renderData.pMonitor->m_blurFBShouldRender = willPrecomputeBlur;
+ 
+     if (m_passElements.empty())
+         return {};
 diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 --- a/src/helpers/Monitor.cpp
 +++ b/src/helpers/Monitor.cpp
