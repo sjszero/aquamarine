@@ -58,8 +58,7 @@ CAnlandBackend::CAnlandBackend(CSharedPointer<CBackend> backend, const std::stri
     : m_backend(backend), m_socketPath(socketPath) {
     ANLAND_LOG("CAnlandBackend constructed, socket: %s", socketPath.c_str());
     m_dummyDRMFD = openDummyDRM();
-    // Initialize self
-    self = CWeakPointer<CAnlandBackend>(this);
+    // self 在头文件中已经声明为 CWeakPointer，由外部设置
 }
 
 CAnlandBackend::~CAnlandBackend() {
@@ -209,7 +208,8 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
     std::vector<CSharedPointer<SPollFD>> result;
     if (!m_running || m_destroying) return result;
 
-    auto weakSelf = CWeakPointer<CAnlandBackend>(self.lock());
+    // 使用 self 获取 weakSelf
+    CWeakPointer<CAnlandBackend> weakSelf = self;
 
     if (m_reconnectTimerFd < 0 && m_inFallback) setupReconnectTimer();
     if (m_reconnectTimerFd >= 0) {
@@ -518,6 +518,26 @@ std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
 
     return formats;
+}
+
+std::vector<SDRMFormat> CAnlandBackend::getCursorFormats() {
+    return {};
+}
+
+std::vector<CSharedPointer<IAllocator>> CAnlandBackend::getAllocators() {
+    return {};
+}
+
+CSharedPointer<IAllocator> CAnlandBackend::preferredAllocator() {
+    return nullptr;
+}
+
+CWeakPointer<IBackendImplementation> CAnlandBackend::getPrimary() {
+    return self;
+}
+
+int CAnlandBackend::drmRenderNodeFD() {
+    return m_dummyDRMFD;
 }
 
 void CAnlandBackend::shutdown() {
