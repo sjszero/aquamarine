@@ -287,6 +287,42 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
          Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
          return color;
      }
+diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
+--- a/src/render/pass/Pass.cpp
++++ b/src/render/pass/Pass.cpp
+@@ -53,6 +53,17 @@ void CRenderPass::add(UP<IPassElement>&& el) {
+ 
+ void CRenderPass::simplify(bool willBlur, const CRegion& liveBlurRegion) {
+     const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
++
++    // Anland: 完全禁用简化 pass，避免因 ImageDescription 缺失导致崩溃
++    // Hyprland 的 simplify 依赖 ImageDescription 做颜色管理优化，
++    // Anland 后端禁用颜色管理后此优化不再需要，直接跳过。
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++        for (auto& el : m_passElements) {
++            el->elementDamage = m_damage;
++        }
++        return;
++    }
++
+     static auto PDEBUGPASS = CConfigValue<Config::INTEGER>("debug:pass");
+ 
+     // TODO: use precompute blur for instances where there is nothing in between
+@@ -157,6 +167,14 @@ CRegion CRenderPass::render(const CRegion& damage_) {
+     } else
+         g_pHyprRenderer->m_renderData.finalDamage = m_damage;
+ 
++    // Anland: 如果简化被禁用（通过环境变量），跳过 simplify
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++        // 已经在 simplify 中处理了，这里不需要额外操作
++        // 但为了确保，强制设置 noSimplify
++        g_pHyprRenderer->m_renderData.noSimplify = true;
++    }
++
++    // 如果 noSimplify 为 true，跳过 simplify
+     if (g_pHyprRenderer->m_renderData.noSimplify || willDisableSimplification) {
+         for (auto& el : m_passElements) {
+             el->elementDamage = m_damage;
 diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 --- a/src/helpers/Monitor.cpp
 +++ b/src/helpers/Monitor.cpp
@@ -316,7 +352,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  CMonitor::~CMonitor() {
      m_events.destroy.emit();
      if (g_pHyprRenderer && g_pHyprRenderer->glBackend())
-@@ -236,6 +254,17 @@ CMonitor::~CMonitor() {
+@@ -236,6 +255,17 @@ CMonitor::~CMonitor() {
  void CMonitor::onConnect(bool noRule) {
      Event::bus()->m_events.monitor.preAdded.emit(m_self.lock());
      CScopeGuard x = {[]() { g_pCompositor->arrangeMonitors(); }};
@@ -334,7 +370,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
  
      m_zoomAnimProgress->setValueAndWarp(0.F);
      m_zoomAnimFrameCounter = 0;
-@@ -460,5 +488,16 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
+@@ -460,5 +490,16 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
          default: UNREACHABLE();
      }
 +
@@ -351,7 +387,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      if ((minLuminance() >= 0 || maxLuminance() > 0) && (cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID))
          m_imageDescription = m_imageDescription->with({
              .min       = minLuminance() >= 0 ? minLuminance() : m_imageDescription->value().luminances.min, //
-@@ -510,6 +549,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -510,6 +551,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
  
      const bool sameDrmMode = !std::memcmp(&m_customDrmMode, &RULE->m_drmMode, sizeof(m_customDrmMode));
  
@@ -364,7 +400,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -686,9 +731,25 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -686,9 +733,25 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
      };
      // clang-format on
  
@@ -390,7 +426,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
          m_output->state->setFormat(fmt.second);
          m_prevDrmFormat = m_drmFormat;
          m_drmFormat     = fmt.second;
-@@ -701,7 +763,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -701,7 +764,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
