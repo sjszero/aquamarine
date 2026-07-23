@@ -384,9 +384,10 @@ diff --git a/src/main.cpp b/src/main.cpp
      if (!ignoreSudo && NInit::isSudo()) {
          std::println(stderr,
                       "[ ERROR ] Hyprland was launched with superuser privileges, but the privileges check is not omitted.\n"
+diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
 --- a/src/render/OpenGL.cpp
 +++ b/src/render/OpenGL.cpp
-@@ -975,6 +975,11 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
+@@ -975,7 +975,12 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
          shaders->TEXVERTSRC    = shaderLoader->process("tex300.vert");
          shaders->TEXVERTSRC320 = shaderLoader->process("tex320.vert");
  
@@ -399,6 +400,7 @@ diff --git a/src/main.cpp b/src/main.cpp
 +        }
  
          g_pShaderLoader = std::move(shaderLoader);
+ 
 @@ -1110,6 +1116,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
  void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, const STextureRenderData& data) {
      RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
