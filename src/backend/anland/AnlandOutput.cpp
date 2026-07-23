@@ -12,8 +12,10 @@
 #include <cerrno>
 #include <chrono>
 
+// 完整的宏定义
 #define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_WARN(fmt, ...) do { fprintf(stderr, "[ANLAND][WARN] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
@@ -608,7 +610,8 @@ void CAnlandOutput::onBufferReady() {
     if (m_eglDisplay != EGL_NO_DISPLAY) {
         GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
         if (status != GL_FRAMEBUFFER_COMPLETE) {
-            ANLAND_WARN("onBufferReady: FBO incomplete before release: 0x%x", status);
+            // 使用 ANLAND_ERR 代替未定义的 ANLAND_WARN
+            ANLAND_ERR("onBufferReady: FBO incomplete before release: 0x%x", status);
         }
     }
 
