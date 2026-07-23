@@ -254,6 +254,20 @@ diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
          std::map<PHLMONITORREF, SP<IFramebuffer>> m_monitorBGFBs;
  
          struct {
+diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
+--- a/src/render/OpenGL.cpp
++++ b/src/render/OpenGL.cpp
+@@ -975,7 +975,9 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
+         shaders->TEXVERTSRC    = shaderLoader->process("tex300.vert");
+         shaders->TEXVERTSRC320 = shaderLoader->process("tex320.vert");
+ 
+-        m_cmSupported = *PCM;
++        // Anland: 强制禁用颜色管理，避免因 ImageDescription 缺失导致崩溃
++        // m_cmSupported = *PCM;
++        m_cmSupported = false;
+ 
+         g_pShaderLoader = std::move(shaderLoader);
+ 
 diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
 --- a/src/render/Renderer.cpp
 +++ b/src/render/Renderer.cpp
@@ -273,20 +287,6 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
          Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
          return color;
      }
-diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
---- a/src/render/OpenGL.cpp
-+++ b/src/render/OpenGL.cpp
-@@ -975,7 +975,9 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
-         shaders->TEXVERTSRC    = shaderLoader->process("tex300.vert");
-         shaders->TEXVERTSRC320 = shaderLoader->process("tex320.vert");
- 
--        m_cmSupported = *PCM;
-+        // Anland: 强制禁用颜色管理，避免因 ImageDescription 缺失导致崩溃
-+        // m_cmSupported = *PCM;
-+        m_cmSupported = false;
- 
-         g_pShaderLoader = std::move(shaderLoader);
- 
 diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 --- a/src/helpers/Monitor.cpp
 +++ b/src/helpers/Monitor.cpp
@@ -392,16 +392,20 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      m_enabled10bit = set10bit;
  
      m_supportsWideColor = RULE->m_supportsWideColor;
-@@ -2663,7 +2720,14 @@ bool CMonitor::useFP16() {
- 
+@@ -2663,6 +2720,18 @@ bool CMonitor::useFP16() {
  PImageDescription CMonitor::workBufferImageDescription() {
      static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
  
 +    // Anland: 如果 imageDescription 为空，返回默认 sRGB
-+    if (isAnlandBackend(m_output) && !m_imageDescription) {
-+        m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
-+        m_blurFBDirty = true;
-+        return m_imageDescription;
++    if (isAnlandBackend(m_output)) {
++        if (!m_imageDescription) {
++            m_imageDescription = NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION;
++            m_blurFBDirty = true;
++        }
++        if (!m_cachedInternalDescription) {
++            m_cachedInternalDescription = m_imageDescription;
++        }
++        return m_cachedInternalDescription ? m_cachedInternalDescription : m_imageDescription;
 +    }
 +
      if (!useFP16() && !m_imageDescription->value().icc.present)
