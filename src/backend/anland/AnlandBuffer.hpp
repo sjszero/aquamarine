@@ -13,12 +13,16 @@ class CAnlandAllocator;
 
 /**
  * Anland DMA buffer - wraps a dmabuf fd from the Android display daemon
+ *
+ * Supports:
+ * - DRM modifiers (compressed textures)
+ * - Multiple formats (8-bit, 10-bit, FP16)
+ * - Buffer release signaling
  */
 class CAnlandDmaBuffer : public IBuffer {
 public:
     CAnlandDmaBuffer(int fd, const buf_info& info,
-                     uint32_t drmFormat, uint64_t modifier = DRM_FORMAT_MOD_INVALID,
-                     bool forceLinear = false);
+                     uint32_t drmFormat, uint64_t modifier = DRM_FORMAT_MOD_INVALID);
     virtual ~CAnlandDmaBuffer();
 
     virtual eBufferCapability caps() override { return BUFFER_CAPABILITY_NONE; }
@@ -40,7 +44,6 @@ private:
     uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
     uint64_t m_modifier = DRM_FORMAT_MOD_INVALID;
     int m_ownedFd = -1;
-    bool m_forceLinear = false;
 };
 
 } // namespace Aquamarine

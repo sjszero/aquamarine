@@ -4,29 +4,18 @@
 #include <cstring>
 #include <drm_fourcc.h>
 
-// 日志宏
-#define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
-#define ANLAND_WARN(fmt, ...) do { fprintf(stderr, "[ANLAND][WARN] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERROR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERROR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
 namespace Aquamarine {
 
 CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info,
-                                   uint32_t drmFormat, uint64_t modifier,
-                                   bool forceLinear)
-    : m_info(info), m_drmFormat(drmFormat), m_modifier(modifier), m_forceLinear(forceLinear) {
+                                   uint32_t drmFormat, uint64_t modifier)
+    : m_info(info), m_drmFormat(drmFormat), m_modifier(modifier) {
     
-    // Force LINEAR modifier if requested
-    if (m_forceLinear) {
+    // 确保 LINEAR 修饰符被正确使用
+    if (m_modifier == DRM_FORMAT_MOD_INVALID || m_modifier == 0) {
         m_modifier = DRM_FORMAT_MOD_LINEAR;
-        ANLAND_DEBUG("Forcing LINEAR modifier for buffer");
-    }
-    
-    // If modifier is INVALID and we're not forcing linear, use LINEAR as fallback
-    if (m_modifier == DRM_FORMAT_MOD_INVALID) {
-        m_modifier = DRM_FORMAT_MOD_LINEAR;
-        ANLAND_DEBUG("Converting INVALID modifier to LINEAR for compatibility");
     }
     
     m_ownedFd = dup(fd);
@@ -38,14 +27,13 @@ CAnlandDmaBuffer::CAnlandDmaBuffer(int fd, const buf_info& info,
     m_fd = m_ownedFd;
     size = { (float)info.width, (float)info.height };
     opaque = true;
-    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d, size=%dx%d, drm_fmt=0x%x, modifier=0x%lx",
+    ANLAND_DEBUG("CAnlandDmaBuffer: fd=%d, size=%dx%d, drm_fmt=0x%x, modifier=0x%lx (LINEAR forced)",
                  m_fd, info.width, info.height, drmFormat, m_modifier);
 }
 
 CAnlandDmaBuffer::~CAnlandDmaBuffer() {
     ANLAND_DEBUG("CAnlandDmaBuffer destructor: fd=%d", m_fd);
     inUse = false;
-    
     if (m_ownedFd >= 0) {
         close(m_ownedFd);
         m_ownedFd = -1;
@@ -65,7 +53,7 @@ SDMABUFAttrs CAnlandDmaBuffer::dmabuf() {
     attrs.success = true;
     attrs.size = size;
     attrs.format = m_drmFormat;
-    attrs.modifier = m_modifier;
+    attrs.modifier = m_modifier;  // 使用修复后的修饰符
     attrs.planes = 1;
     attrs.fds[0] = m_fd;
     attrs.offsets[0] = m_info.offset;

@@ -26,9 +26,8 @@ if(PIPEWIRE_FOUND)
     target_include_directories(aquamarine PRIVATE ${PIPEWIRE_INCLUDE_DIRS})
 endif()
 
-# EGL/GLES dependencies - 需要链接 EGL 和 GLESv2
+# EGL/GLES dependencies (already in main CMakeLists)
 target_link_libraries(aquamarine PRIVATE
     OpenGL::EGL
     OpenGL::GLES2
-    ${CMAKE_DL_LIBS}
 )

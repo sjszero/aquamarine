@@ -4,7 +4,6 @@
 #include "AnlandBuffer.hpp"
 #include <aquamarine/backend/Backend.hpp>
 
-#define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_ERROR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERROR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
@@ -12,9 +11,10 @@ namespace Aquamarine {
 
 using Hyprutils::Memory::CSharedPointer;
 
+// 分配器现在只作为兼容层，实际缓冲区由 CAnlandOutput 直接管理
 CAnlandAllocator::CAnlandAllocator(CAnlandOutput* output)
     : m_output(output) {
-    ANLAND_DEBUG("CAnlandAllocator constructed");
+    ANLAND_DEBUG("CAnlandAllocator constructed (compatibility mode)");
 }
 
 CSharedPointer<IAllocator> CAnlandAllocator::create(CAnlandOutput* output) {
@@ -28,11 +28,15 @@ CSharedPointer<IAllocator> CAnlandAllocator::create(CAnlandOutput* output) {
 
 CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& params, CSharedPointer<CSwapchain> swapchain) {
     (void)params;
+    (void)swapchain;
+    
     if (!m_output) {
         ANLAND_ERROR("acquire: m_output is null");
         return nullptr;
     }
 
+    // 【修复】直接返回现有的缓冲区，不维护额外的状态
+    // 实际缓冲区管理由 CAnlandOutput::commit() 直接处理
     std::lock_guard<std::mutex> lock(m_mutex);
 
     int count = m_output->getBufferCount();
@@ -55,6 +59,7 @@ CSharedPointer<IBuffer> CAnlandAllocator::acquire(const SAllocatorBufferParams& 
         idx = (idx + 1) % count;
     }
 
+    // 如果所有缓冲区都在使用，返回第一个
     auto buf = m_output->getBuffer(start);
     if (buf && buf->good()) {
         ANLAND_DEBUG("acquire: reusing buffer %d (all busy)", start);

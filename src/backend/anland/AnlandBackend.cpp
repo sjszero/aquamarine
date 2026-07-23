@@ -88,7 +88,7 @@ bool CAnlandBackend::start() {
     m_running = true;
     m_inFallback = true;
 
-    // Initialize audio and camera engines
+    // Initialize audio and camera engines (nodes persist across connections)
     anland_audio_start();
     anland_camera_start();
 
@@ -159,18 +159,6 @@ void CAnlandBackend::onReady() {
     createOutputIfNeeded();
     emitOutputIfReady();
 
-    // Pass EGL display to output for direct rendering
-    if (m_output) {
-        if (m_output->getEGLDisplay() == EGL_NO_DISPLAY) {
-            EGLDisplay dpy = eglGetCurrentDisplay();
-            EGLContext ctx = eglGetCurrentContext();
-            if (dpy != EGL_NO_DISPLAY && ctx != EGL_NO_CONTEXT) {
-                m_output->setEGL(dpy, ctx);
-                ANLAND_LOG("EGL context obtained from current context");
-            }
-        }
-    }
-
     if (m_output && !m_inFallback) {
         m_output->exitFallback();
         m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEW_MONITOR);
@@ -207,8 +195,7 @@ std::vector<CSharedPointer<SPollFD>> CAnlandBackend::pollFDs() {
     std::vector<CSharedPointer<SPollFD>> result;
     if (!m_running || m_destroying) return result;
 
-    // 使用 self 获取 weakSelf
-    CWeakPointer<CAnlandBackend> weakSelf = self;
+    auto weakSelf = CWeakPointer<CAnlandBackend>(this->self.lock());
 
     if (m_reconnectTimerFd < 0 && m_inFallback) setupReconnectTimer();
     if (m_reconnectTimerFd >= 0) {
@@ -454,6 +441,12 @@ void CAnlandBackend::updateCameraResources() {
     ANLAND_LOG("Camera resources requested");
 }
 
+/**
+ * updateClipboard() - 通过回调注入剪贴板数据
+ *
+ * 如果注册了剪贴板回调，则调用它。Hyprland 端通过 setClipboardCallback()
+ * 注册回调函数，将文本注入 SeatManager。
+ */
 void CAnlandBackend::updateClipboard(const InputEvent& ev) {
     if (m_inFallback || !m_display) return;
 
@@ -468,6 +461,7 @@ void CAnlandBackend::updateClipboard(const InputEvent& ev) {
 
     std::string text(reinterpret_cast<char*>(data.data()), size);
 
+    // 去重：如果文本相同则跳过
     if (text == m_lastClipboardText) {
         ANLAND_TRACE("updateClipboard: text unchanged, skipping");
         return;
@@ -476,6 +470,7 @@ void CAnlandBackend::updateClipboard(const InputEvent& ev) {
 
     ANLAND_LOG("updateClipboard: received %zu bytes", text.size());
 
+    // 通过回调注入到 Hyprland
     if (m_clipboardCallback) {
         m_clipboardCallback(text);
         ANLAND_LOG("updateClipboard: callback invoked");
@@ -484,6 +479,12 @@ void CAnlandBackend::updateClipboard(const InputEvent& ev) {
     }
 }
 
+/**
+ * updateTextInput() - 通过回调注入文本输入
+ *
+ * 如果注册了文本输入回调，则调用它。Hyprland 端通过 setTextInputCallback()
+ * 注册回调函数，将文本注入 InputMethodRelay。
+ */
 void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     if (m_inFallback || !m_display) return;
 
@@ -499,6 +500,7 @@ void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     std::string text(reinterpret_cast<char*>(data.data()), size);
     ANLAND_LOG("updateTextInput: received text: %s", text.c_str());
 
+    // 通过回调注入到 Hyprland
     if (m_textInputCallback) {
         m_textInputCallback(text);
         ANLAND_LOG("updateTextInput: callback invoked");
@@ -510,11 +512,13 @@ void CAnlandBackend::updateTextInput(const InputEvent& ev) {
 std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     std::vector<SDRMFormat> formats;
 
-    // Return formats with LINEAR modifier for compatibility
-    formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
-    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
+    // 只返回 dmabuf 实际使用的格式，优先 ABGR8888
+    // 这样 Hyprland 会选择与导入纹理一致的格式
+    formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    // 保留其他格式作为 fallback，但 ABGR 排在前面
+    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_INVALID}});
 
     return formats;
 }

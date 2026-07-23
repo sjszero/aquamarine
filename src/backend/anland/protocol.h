@@ -9,20 +9,12 @@
 extern "C" {
 #endif
 
-// ============================================================
-// Control protocol messages
-// ============================================================
-
 #define CTRL_MSG_CONSUMER_HELLO  1
 #define CTRL_MSG_PRODUCER_HELLO  2
 #define CTRL_MSG_SCREEN_INFO     7
 #define CTRL_MSG_REJECT          8
 #define CTRL_MSG_PICKUP_FDS      9
 #define CTRL_MSG_FDS_READY      10
-
-// ============================================================
-// Data protocol messages
-// ============================================================
 
 #define DATA_MSG_BUF_READY       100
 #define DATA_MSG_REFRESH_DONE    101
@@ -33,10 +25,6 @@ extern "C" {
 
 #define MAX_BUFS 8
 #define SERVICE_TYPE_CAMERA 1
-
-// ============================================================
-// Protocol structs (only define once)
-// ============================================================
 
 struct ctrl_msg {
     uint32_t type;
@@ -66,10 +54,6 @@ struct buf_info {
     uint32_t offset;
 } __attribute__((packed));
 
-// ============================================================
-// Input event types
-// ============================================================
-
 #define INPUT_TYPE_TOUCH          1
 #define INPUT_TYPE_KEY            2
 #define INPUT_TYPE_POINTER_MOTION 3
@@ -81,7 +65,6 @@ struct buf_info {
 #define INPUT_TYPE_TEXT_INPUT     9
 #define INPUT_TYPE_ACTION         10
 #define INPUT_TYPE_RESOURCE       11
-#define INPUT_TYPE_RESOURCE_INVALID 12
 
 #define INPUT_ACTION_DOWN    0
 #define INPUT_ACTION_UP      1
@@ -138,13 +121,6 @@ struct InputEvent {
     };
 } __attribute__((packed));
 
-// ============================================================
-// Output event types
-// ============================================================
-
-#define OUTPUT_TYPE_CLIPBOARD 1
-#define OUTPUT_TYPE_RESOURCES_REQUEST 2
-
 struct OutputEvent {
     uint32_t type;
     union {
@@ -161,9 +137,8 @@ struct OutputEvent {
     };
 } __attribute__((packed));
 
-// ============================================================
-// Audio protocol
-// ============================================================
+#define OUTPUT_TYPE_CLIPBOARD 1
+#define OUTPUT_TYPE_RESOURCES_REQUEST 2
 
 #define AUDIO_MSG_FORMAT 1
 #define AUDIO_MSG_PCM    2

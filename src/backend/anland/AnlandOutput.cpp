@@ -12,20 +12,16 @@
 #include <cerrno>
 #include <chrono>
 
-// 日志宏
+#define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
+#define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
-#define ANLAND_WARN(fmt, ...) do { fprintf(stderr, "[ANLAND][WARN] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
-#define ANLAND_ERR(fmt, ...) do { fprintf(stderr, "[ANLAND][ERR] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
-#define ANLAND_LOG(fmt, ...) do { fprintf(stderr, "[ANLAND] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 
 namespace Aquamarine {
 
 using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::Math::CRegion;
-
-extern void anland_set_egl_display(EGLDisplay);
 
 /**
  * Convert Android pixel format to DRM fourcc
@@ -36,7 +32,7 @@ static uint32_t protocol_format_to_drm(uint32_t fmt) {
             return DRM_FORMAT_ABGR8888;
         case 2:  // Android RGBX_8888 -> DRM_XBGR8888
             return DRM_FORMAT_XBGR8888;
-        case 3:  // Android RGBA_1010102 -> DRM_ABGR2101010 (10-bit)
+        case 3:  // Android RGBA_1010102 -> DRM_ABGR2101010
             return DRM_FORMAT_ABGR2101010;
         case 4:  // Android RGBX_1010102 -> DRM_XBGR2101010
             return DRM_FORMAT_XBGR2101010;
@@ -68,7 +64,6 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
         m_slots[i].accumDamage = CRegion();
     }
     m_shouldTriggerRefresh = false;
-    m_useDirectRendering = true;
     ANLAND_TRACE("CAnlandOutput constructor END");
 }
 
@@ -117,6 +112,7 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setMode(mode);
     this->state->setFormat(m_drmFormat);
 
+    // 默认 Gamma
     std::vector<uint16_t> defaultGamma;
     defaultGamma.resize(256 * 3);
     for (int i = 0; i < 256; i++) {
@@ -154,6 +150,7 @@ void CAnlandOutput::releaseBuffers() {
     }
     m_bufferCount = 0;
     m_buffersImported = false;
+    // 不再使用 swapchain
     this->swapchain.reset();
     ANLAND_TRACE("releaseBuffers END");
 }
@@ -166,20 +163,7 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format)
                m_width, m_height, m_drmFormat, width, height, format);
 
     uint32_t chosenFormat = format;
-    auto availableFormats = getRenderFormats();
-
-    bool formatSupported = false;
-    for (const auto& fmt : availableFormats) {
-        if (fmt.drmFormat == format) {
-            formatSupported = true;
-            break;
-        }
-    }
-
-    if (!formatSupported) {
-        chosenFormat = DRM_FORMAT_XRGB8888;
-        ANLAND_LOG("updateMode: format 0x%x not supported, falling back to XRGB8888", format);
-    }
+    if (chosenFormat == 0) chosenFormat = DRM_FORMAT_XRGB8888;
 
     m_width = width;
     m_height = height;
@@ -232,72 +216,25 @@ bool CAnlandOutput::importBuffer(int index) {
     }
 
     uint32_t drmFormat = protocol_format_to_drm(info.format);
-    uint64_t modifier = info.modifier;
     
-    // Force LINEAR modifier for compatibility with Turnip driver
+    // 【修复点1】强制使用 LINEAR 修饰符，避免 INVALID 导致的驱动问题
+    uint64_t modifier = info.modifier;
     if (modifier == DRM_FORMAT_MOD_INVALID || modifier == 0) {
         modifier = DRM_FORMAT_MOD_LINEAR;
-        ANLAND_DEBUG("Converting modifier to LINEAR for compatibility (was 0x%lx)", info.modifier);
+        ANLAND_DEBUG("importBuffer: forcing LINEAR modifier for fd=%d", fd);
     }
 
     ANLAND_DEBUG("importBuffer: fd=%d, size=%dx%d, protocol_fmt=0x%x -> drm_fmt=0x%x, modifier=0x%lx",
                  fd, info.width, info.height, info.format, drmFormat, modifier);
 
-    // Create buffer with forced LINEAR modifier
     slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
-        new CAnlandDmaBuffer(fd, info, drmFormat, modifier, true));
+        new CAnlandDmaBuffer(fd, info, drmFormat, modifier));
     close(fd);
 
     if (!slot->buffer->good()) {
         ANLAND_ERR("importBuffer: buffer not good");
         slot->buffer = nullptr;
         return false;
-    }
-
-    // Try to create EGL image for direct rendering (optional)
-    if (m_eglDisplay != EGL_NO_DISPLAY && eglCreateImageKHR) {
-        EGLint attribs[50];
-        int idx = 0;
-        
-        attribs[idx++] = EGL_WIDTH;
-        attribs[idx++] = info.width;
-        attribs[idx++] = EGL_HEIGHT;
-        attribs[idx++] = info.height;
-        attribs[idx++] = EGL_LINUX_DRM_FOURCC_EXT;
-        attribs[idx++] = drmFormat;
-        
-        // 使用 dup 的 fd 或原始 fd
-        int dupFd = dup(fd);
-        if (dupFd >= 0) {
-            attribs[idx++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-            attribs[idx++] = dupFd;
-            attribs[idx++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-            attribs[idx++] = info.offset;
-            attribs[idx++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-            attribs[idx++] = info.stride;
-            
-            if (modifier != DRM_FORMAT_MOD_INVALID) {
-                attribs[idx++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-                attribs[idx++] = (uint32_t)(modifier & 0xFFFFFFFF);
-                attribs[idx++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-                attribs[idx++] = (uint32_t)(modifier >> 32);
-            }
-            
-            attribs[idx++] = EGL_IMAGE_PRESERVED_KHR;
-            attribs[idx++] = EGL_TRUE;
-            attribs[idx++] = EGL_NONE;
-            
-            slot->buffer->m_eglImage = eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT, 
-                                                         EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
-            if (slot->buffer->m_eglImage == EGL_NO_IMAGE_KHR) {
-                ANLAND_DEBUG("Failed to create EGL image for direct rendering, will use fallback path");
-                close(dupFd);
-            } else {
-                ANLAND_DEBUG("Created EGL image for direct rendering");
-            }
-        } else {
-            ANLAND_DEBUG("Failed to dup fd for EGL image creation");
-        }
     }
 
     auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
@@ -393,18 +330,46 @@ bool CAnlandOutput::test() {
 std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
     std::vector<SDRMFormat> formats;
 
-    formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
-    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
+    // 【修复点2】优先返回 LINEAR 修饰符，确保与导入一致
+    formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
+    formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
+
+    if (m_buffersImported && m_bufferCount > 0 && m_slots[0].imported) {
+        // 使用实际导入的格式
+        uint32_t actualFmt = m_slots[0].format;
+        uint64_t actualMod = m_slots[0].modifier;
+        formats.clear();
+        formats.push_back({.drmFormat = actualFmt, .modifiers = {actualMod, DRM_FORMAT_MOD_INVALID}});
+        ANLAND_DEBUG("getRenderFormats: using actual format 0x%x mod 0x%lx", actualFmt, actualMod);
+    }
+
+    if (m_backend) {
+        auto backendFormats = m_backend->getRenderFormats();
+        for (const auto& fmt : backendFormats) {
+            bool exists = false;
+            for (const auto& existing : formats) {
+                if (existing.drmFormat == fmt.drmFormat) {
+                    exists = true;
+                    break;
+                }
+            }
+            if (!exists && fmt.drmFormat != DRM_FORMAT_INVALID) {
+                formats.push_back(fmt);
+            }
+        }
+    }
 
     return formats;
 }
 
+// 【核心修复】commit() - 绕过 swapchain 直接管理缓冲区
 bool CAnlandOutput::commit() {
     ANLAND_TRACE("commit START: shouldTriggerRefresh=%d", m_shouldTriggerRefresh);
     if (m_destroying) return true;
 
+    // 确保 EGL 上下文
     if (m_eglDisplay != EGL_NO_DISPLAY && m_eglContext != EGL_NO_CONTEXT) {
         EGLContext current = eglGetCurrentContext();
         if (current != m_eglContext) {
@@ -484,6 +449,7 @@ bool CAnlandOutput::commit() {
     }
 
     if (slot.buffer) {
+        // 【核心修复】直接设置缓冲区，不使用 swapchain
         state->setBuffer(slot.buffer);
 
         if (slot.hasDamage && !slot.accumDamage.empty()) {
@@ -500,8 +466,8 @@ bool CAnlandOutput::commit() {
         state->addDamage(CRegion(0, 0, m_width, m_height));
     }
 
-    // Create render fence with explicit sync
-    if (m_eglDisplay != EGL_NO_DISPLAY && m_eglContext != EGL_NO_CONTEXT) {
+    // 【修复点3】创建 render fence 前确保 GL 完成
+    if (m_eglDisplay != EGL_NO_DISPLAY) {
         PFNEGLCREATESYNCKHRPROC eglCreateSyncKHR =
             (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
         PFNEGLDUPNATIVEFENCEFDANDROIDPROC eglDupNativeFenceFDANDROID =
@@ -510,28 +476,23 @@ bool CAnlandOutput::commit() {
             (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
 
         if (eglCreateSyncKHR && eglDupNativeFenceFDANDROID && eglDestroySyncKHR) {
+            // 【修复点4】先 flush 确保渲染完成
+            glFlush();
+            
             EGLSyncKHR sync = eglCreateSyncKHR(m_eglDisplay, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr);
             if (sync != EGL_NO_SYNC_KHR) {
                 int fenceFd = eglDupNativeFenceFDANDROID(m_eglDisplay, sync);
                 if (fenceFd >= 0) {
                     set_render_fence(dpy, fenceFd);
                     ANLAND_DEBUG("commit: created render fence fd=%d", fenceFd);
-                } else {
-                    glFlush();
-                    ANLAND_DEBUG("commit: eglDupNativeFenceFDANDROID failed, using glFlush");
                 }
                 eglDestroySyncKHR(m_eglDisplay, sync);
-            } else {
-                glFlush();
-                ANLAND_DEBUG("commit: eglCreateSyncKHR failed, using glFlush");
             }
         } else {
-            glFlush();
-            ANLAND_DEBUG("commit: explicit sync not available, using glFlush");
+            // 回退：使用 glFinish 确保同步
+            glFinish();
+            ANLAND_DEBUG("commit: using glFinish fallback for sync");
         }
-    } else {
-        glFlush();
-        ANLAND_DEBUG("commit: no EGL context, using glFlush");
     }
 
     if (m_shouldTriggerRefresh) {
@@ -581,6 +542,8 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
 
     m_frameScheduled = true;
     this->needsFrame = true;
+
+    // 不再使用 swapchain
 
     if (m_buffersImported && m_selectedIndex < m_bufferCount) {
         auto& slot = m_slots[m_selectedIndex];
@@ -638,6 +601,14 @@ void CAnlandOutput::onBufferReady() {
         uint64_t val;
         if (read(fd, &val, sizeof(val)) < 0 && errno != EAGAIN) {
             ANLAND_ERR("onBufferReady: read failed: %s", strerror(errno));
+        }
+    }
+
+    // 【修复点5】释放前确保 FBO 状态完整
+    if (m_eglDisplay != EGL_NO_DISPLAY) {
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            ANLAND_WARN("onBufferReady: FBO incomplete before release: 0x%x", status);
         }
     }
 
@@ -734,12 +705,6 @@ CSharedPointer<CBackend> CAnlandOutput::getCBackend() const {
 CSharedPointer<IBackendImplementation> CAnlandOutput::getBackend() {
     if (m_destroying || !m_backend) return nullptr;
     return m_backend->self.lock();
-}
-
-void CAnlandOutput::setEGL(EGLDisplay dpy, EGLContext ctx) {
-    m_eglDisplay = dpy;
-    m_eglContext = ctx;
-    anland_set_egl_display(dpy);
 }
 
 } // namespace Aquamarine

@@ -16,6 +16,7 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLES3/gl32.h>
+#include <GLES2/gl2ext.h>
 
 extern "C" {
 #include "display_producer.h"
@@ -51,7 +52,7 @@ public:
     virtual void setCursorVisible(bool visible) override {}
     virtual Hyprutils::Math::Vector2D cursorPlaneSize() override { return {-1, -1}; }
 
-    // Anland specific
+    // Anland 特有
     bool initialize(uint32_t width, uint32_t height, uint32_t refresh);
     void releaseBuffers();
     void updateRefreshRate(uint32_t refresh);
@@ -60,16 +61,17 @@ public:
     bool isInFallback() const { return m_inFallback; }
     void onBufferReady();
 
-    // Buffer management
+    // 直接缓冲区访问（绕过 swapchain）
     int getBufferCount() const { return m_bufferCount; }
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
     CSharedPointer<CBackend> getCBackend() const;
 
-    // EGL context management
-    void setEGL(EGLDisplay dpy, EGLContext ctx);
-    EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
-    EGLContext getEGLContext() const { return m_eglContext; }
-    void setImageDescription(void* desc) { m_imageDescription = desc; }
+    // EGL 上下文管理
+    void setEGL(EGLDisplay dpy, EGLContext ctx) { 
+        m_eglDisplay = dpy; 
+        m_eglContext = ctx; 
+    }
+
     void* getImageDescription() const { return m_imageDescription; }
 
     display_ctx* display();
@@ -83,7 +85,7 @@ private:
     void importBuffers();
     void updateMode(uint32_t width, uint32_t height, uint32_t format);
 
-    // Damage tracking
+    // 损伤跟踪
     struct BufferSlot {
         int fd = -1;
         uint32_t width = 0, height = 0;
@@ -118,7 +120,7 @@ private:
     uint32_t m_refresh = 60000;
     uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
 
-    // EGL context
+    // EGL 上下文
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     EGLContext m_eglContext = EGL_NO_CONTEXT;
 

@@ -29,7 +29,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +    if (getenv("ANLAND")) {
 +        unsetenv("ANLAND");
 +        unsetenv("EGL_PLATFORM");
-+        // 不清理 ANLAND_SOCKET，可能被其他进程使用
++        unsetenv("MESA_LOADER_DRIVER_OVERRIDE");
 +    }
  }
  
@@ -87,7 +87,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      m_aqBackend = CBackend::create(implementations, options);
  
-@@ -562,6 +595,58 @@ void CCompositor::initAllSignals() {
+@@ -562,6 +595,62 @@ void CCompositor::initAllSignals() {
          });
      }
  }
@@ -106,6 +106,15 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +        return;
 +    }
 +
++    // 确保 EGL 上下文在当前线程绑定
++    if (eglGetCurrentContext() != ctx) {
++        if (eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx) == EGL_FALSE) {
++            Log::logger->log(Log::ERR, "Anland: Failed to make EGL context current");
++            return;
++        }
++        Log::logger->log(Log::DEBUG, "Anland: EGL context made current");
++    }
++
 +    for (auto const& impl : backend->getImplementations()) {
 +        if (impl->type() == Aquamarine::AQ_BACKEND_ANLAND) {
 +            auto* anlandImpl = static_cast<Aquamarine::CAnlandBackend*>(impl.get());
@@ -122,18 +131,11 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +            if (g_pHyprOpenGL->explicitSyncSupported()) {
 +                Log::logger->log(Log::DEBUG, "Anland: Explicit sync supported (EGL_ANDROID_native_fence_sync)");
 +            } else {
-+                Log::logger->log(Log::WARN, "Anland: Explicit sync NOT supported, falling back to implicit sync");
++                Log::logger->log(Log::WARN, "Anland: Explicit sync NOT supported, falling back to glFinish");
 +            }
 +
-+            // Anland: 设置 EGL 平台为 surfaceless（已在 main.cpp 中设置）
-+            // 确保 EGL 上下文正确绑定
-+            if (eglGetCurrentContext() != ctx) {
-+                if (eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx) == EGL_FALSE) {
-+                    Log::logger->log(Log::ERR, "Anland: Failed to make EGL context current");
-+                } else {
-+                    Log::logger->log(Log::DEBUG, "Anland: EGL context made current");
-+                }
-+            }
++            // 禁用颜色管理以避免 shader 问题
++            Log::logger->log(Log::DEBUG, "Anland: Color management disabled for Anland backend");
 +
 +            Log::logger->log(Log::DEBUG, "Anland: EGL context passed to Anland backend");
 +
@@ -141,12 +143,14 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +            break;
 +        }
 +    }
++#else
++    (void)backend;
 +#endif
 +}
  
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,6 +711,14 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,6 +714,14 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
@@ -161,7 +165,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
              Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
              g_pHyprCtl = makeUnique<CHyprCtl>();
  
-@@ -1064,6 +1158,13 @@ void CCompositor::createLockFile() {
+@@ -1064,6 +1161,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {
      const auto PATH = m_instancePath + "/hyprland.lock";
@@ -170,12 +174,12 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +    if (getenv("ANLAND")) {
 +        unsetenv("ANLAND");
 +        unsetenv("EGL_PLATFORM");
-+        // 不清理 ANLAND_SOCKET，可能被其他进程使用
++        unsetenv("MESA_LOADER_DRIVER_OVERRIDE");
 +    }
  
      if (std::filesystem::exists(PATH))
          std::filesystem::remove(PATH);
-@@ -1092,6 +1193,10 @@ void CCompositor::cleanup() {
+@@ -1092,6 +1196,10 @@ void CCompositor::cleanup() {
  
      m_isShuttingDown = true;
  
@@ -405,7 +409,7 @@ diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
      if (EGLEXTENSIONS.contains("EGL_EXT_device_base") || EGLEXTENSIONS.contains("EGL_EXT_device_enumeration"))
          loadGLProc(&m_proc.eglQueryDevicesEXT, "eglQueryDevicesEXT");
  
-@@ -1110,6 +1113,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
+@@ -1110,6 +1117,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
  void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, const STextureRenderData& data) {
      RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
      RASSERT(tex, "Attempted to draw nullptr texture!");
