@@ -282,10 +282,11 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -680,6 +726,31 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -680,8 +726,32 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
      };
      // clang-format on
  
+     bool set10bit = false;
 +    // Anland: 强制使用 LINEAR modifier 格式
 +    bool anlandFormatSet = false;
 +    if (isAnlandBackend(m_output)) {
@@ -308,22 +309,24 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +            Log::logger->log(Log::WARN, "Anland: Format test failed, falling back to standard format selection");
 +        }
 +    }
-+
+ 
 +    // 只有在 Anland 格式未设置时才执行标准格式循环
 +    if (!anlandFormatSet) {
-     bool set10bit = false;
- 
      for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
-@@ -691,6 +763,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+         m_output->state->setFormat(fmt.second);
+         m_prevDrmFormat = m_drmFormat;
+@@ -691,6 +764,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
-         }
-     }
+-        }
+-    }
++            }
++        }
 +    }
 +    // 注意：set10bit 在 Anland 模式下保持 false
  
      m_enabled10bit = set10bit;
  
-@@ -2676,6 +2750,14 @@ bool CMonitor::useFP16() {
+@@ -2676,6 +2751,14 @@ bool CMonitor::useFP16() {
  PImageDescription CMonitor::workBufferImageDescription() {
      static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
  
@@ -338,7 +341,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      if (!useFP16() && !m_imageDescription->value().icc.present)
          return m_imageDescription;
  
-@@ -2930,7 +3002,12 @@ CMonitorState::CMonitorState(CMonitor* owner) : m_owner(owner) {
+@@ -2930,7 +3003,12 @@ CMonitorState::CMonitorState(CMonitor* owner) : m_owner(owner) {
  }
  
  bool CMonitorState::updateSwapchain() {
@@ -351,7 +354,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const auto& STATE   = m_owner->m_output->state->state();
      const auto& MODE    = STATE.mode ? STATE.mode : STATE.customMode;
      if (!MODE) {
-@@ -2942,6 +3019,11 @@ bool CMonitorState::updateSwapchain() {
+@@ -2942,6 +3020,11 @@ bool CMonitorState::updateSwapchain() {
  }
  
  void CMonitorState::ensureBufferPresent() {
@@ -363,12 +366,11 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const auto& STATE = m_owner->m_output->state->state();
      if (!STATE.enabled) {
          Log::logger->log(Log::TRACE, "CMonitorState::ensureBufferPresent: Ignoring, monitor is not enabled");
-@@ -2950,6 +3032,8 @@ void CMonitorState::ensureBufferPresent() {
+@@ -2950,6 +3033,7 @@ void CMonitorState::ensureBufferPresent() {
      }
  
      if (STATE.buffer) {
 +        // 注意：Anland 模式下不会进入此函数，所以可以安全使用 swapchain
-+        const auto& OPTIONS = m_owner->m_output->swapchain->currentOptions();
          if (const auto params = STATE.buffer->dmabuf(); params.success && params.format == m_owner->m_drmFormat)
              return;
      }
@@ -484,10 +486,7 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
          Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
          return color;
      }
-diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp (beginRender 修改)
---- a/src/render/Renderer.cpp
-+++ b/src/render/Renderer.cpp
-@@ -2300,6 +2300,22 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
+@@ -2300,6 +2308,22 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
      if (m_renderMode == RENDER_MODE_FULL_FAKE)
          return beginFullFakeRenderInternal(pMonitor, damage, fb, simple);
  
@@ -510,7 +509,7 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp (beginRender 修�
      int bufferAge = 0;
  
      if (!buffer) {
-@@ -2314,6 +2330,8 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
+@@ -2314,6 +2338,8 @@ bool IHyprRenderer::beginRender(PHLMONITOR pMonitor, CRegion& damage, eRenderMod
      } else
          m_currentBuffer = buffer;
  
