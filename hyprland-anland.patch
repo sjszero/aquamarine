@@ -290,7 +290,15 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
 diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
 --- a/src/render/pass/Pass.cpp
 +++ b/src/render/pass/Pass.cpp
-@@ -53,6 +53,17 @@ void CRenderPass::add(UP<IPassElement>&& el) {
+@@ -5,6 +5,7 @@
+ #include <ranges>
+ #include "../../Compositor.hpp"
+ #include "../../config/ConfigValue.hpp"
++#include <cstring>
+ #include "../../desktop/view/WLSurface.hpp"
+ #include "../../managers/SeatManager.hpp"
+ #include "../../managers/eventLoop/EventLoopManager.hpp"
+@@ -53,6 +54,17 @@ void CRenderPass::add(UP<IPassElement>&& el) {
  
  void CRenderPass::simplify(bool willBlur, const CRegion& liveBlurRegion) {
      const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
@@ -308,7 +316,7 @@ diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
      static auto PDEBUGPASS = CConfigValue<Config::INTEGER>("debug:pass");
  
      // TODO: use precompute blur for instances where there is nothing in between
-@@ -157,6 +167,14 @@ CRegion CRenderPass::render(const CRegion& damage_) {
+@@ -157,6 +168,14 @@ CRegion CRenderPass::render(const CRegion& damage_) {
      } else
          g_pHyprRenderer->m_renderData.finalDamage = m_damage;
  
