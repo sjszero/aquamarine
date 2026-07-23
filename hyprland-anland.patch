@@ -283,7 +283,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -686,6 +732,29 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -686,6 +732,30 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
      };
      // clang-format on
  
@@ -305,23 +305,25 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +                formatSet = true;
 +            }
 +        }
-+        if (!formatSet) {
-+            Log::logger->log(Log::WARN, "Anland: Format test failed, falling back to standard format selection");
++        if (formatSet) {
++            // Anland 格式已设置，跳过标准格式循环
++            goto skip_standard_format_loop;
 +        }
 +    }
 +
      bool set10bit = false;
  
      for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
-@@ -701,6 +771,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -700,6 +770,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
-+    // if formatSet is true, set10bit remains false and standard loop is skipped
++
++skip_standard_format_loop:
  
      m_enabled10bit = set10bit;
  
-@@ -2676,5 +2747,13 @@ bool CMonitor::useFP16() {
+@@ -2676,5 +2748,13 @@ bool CMonitor::useFP16() {
  PImageDescription CMonitor::workBufferImageDescription() {
      static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
  
