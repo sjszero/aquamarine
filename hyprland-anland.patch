@@ -290,7 +290,7 @@ diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
 diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 --- a/src/helpers/Monitor.cpp
 +++ b/src/helpers/Monitor.cpp
-@@ -227,6 +227,26 @@ CMonitor::CMonitor(SP<Aquamarine::IOutput> output_) : m_state(this), m_output(output_), m_imageDescription(getDefaultImageDescription()) {
+@@ -227,6 +227,25 @@ CMonitor::CMonitor(SP<Aquamarine::IOutput> output_) : m_state(this), m_output(output_), m_imageDescription(getDefaultImageDescription()) {
      m_dpmsBlackOpacity->setUpdateCallback([this](auto) { g_pHyprRenderer->damageMonitor(m_self.lock()); });
  }
  
@@ -300,7 +300,6 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +    auto backend = output->getBackend();
 +    if (!backend)
 +        return false;
-+    // 使用环境变量检测 Anland 后端
 +    return getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0;
 +}
 +
@@ -352,46 +351,27 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      if ((minLuminance() >= 0 || maxLuminance() > 0) && (cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID))
          m_imageDescription = m_imageDescription->with({
              .min       = minLuminance() >= 0 ? minLuminance() : m_imageDescription->value().luminances.min, //
-@@ -472,6 +511,17 @@ void CMonitor::applyCMType(NCMType::eCMType cmType, NTransferFunction::eTF cmSd
-     }
- }
- 
-+PImageDescription CMonitor::workBufferImageDescription() {
-+    // Anland: 确保始终返回有效的 sRGB 描述
-+    if (isAnlandBackend(m_output)) {
-+        if (!m_imageDescription) {
-+            m_imageDescription = getAnlandSRGBDescription();
-+        }
-+        return m_imageDescription;
-+    }
-+    return m_cachedInternalDescription ? m_cachedInternalDescription : m_imageDescription;
-+}
-+
- bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force) {
- 
-     static auto PDISABLESCALECHECKS = CConfigValue<Config::INTEGER>("debug:disable_scale_checks");
-@@ -510,6 +559,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -510,6 +549,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
  
      const bool sameDrmMode = !std::memcmp(&m_customDrmMode, &RULE->m_drmMode, sizeof(m_customDrmMode));
  
 +    // Anland: 强制使用 ABGR8888 格式，与 dmabuf 一致
 +    if (isAnlandBackend(m_output)) {
-+        RULE->m_enable10bit = false;  // 禁用10bit，避免格式不匹配
++        RULE->m_enable10bit = false;
 +        Log::logger->log(Log::DEBUG, "Anland: forcing 8-bit ABGR8888 format");
 +    }
 +
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -686,9 +741,26 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -686,9 +731,25 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
      };
      // clang-format on
  
      bool set10bit = false;
  
-+    // Anland: 强制优先使用 ABGR8888，匹配 dmabuf 格式
++    // Anland: 强制优先使用 ABGR8888
 +    if (isAnlandBackend(m_output)) {
-+        // 先测试 ABGR8888
 +        uint32_t anlandFormat = DRM_FORMAT_ABGR8888;
 +        m_output->state->setFormat(anlandFormat);
 +        m_prevDrmFormat = m_drmFormat;
@@ -410,7 +390,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
          m_output->state->setFormat(fmt.second);
          m_prevDrmFormat = m_drmFormat;
          m_drmFormat     = fmt.second;
-@@ -701,7 +773,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -701,7 +763,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
@@ -419,3 +399,17 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      m_enabled10bit = set10bit;
  
      m_supportsWideColor = RULE->m_supportsWideColor;
+@@ -2676,5 +2740,13 @@ bool CMonitor::useFP16() {
+ PImageDescription CMonitor::workBufferImageDescription() {
+     static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
+ 
++    // Anland: 确保返回有效的 sRGB 描述
++    if (isAnlandBackend(m_output)) {
++        if (!m_imageDescription) {
++            m_imageDescription = getAnlandSRGBDescription();
++        }
++        return m_imageDescription;
++    }
++
+     if (!useFP16() && !m_imageDescription->value().icc.present)
+         return m_imageDescription;
