@@ -31,13 +31,11 @@ class CAnlandTouch;
 
 /**
  * 剪贴板回调类型 - 由 Hyprland 端注册
- * @param text UTF-8 编码的剪贴板文本
  */
 using ClipboardCallback = std::function<void(const std::string& text)>;
 
 /**
  * 文本输入回调类型 - 由 Hyprland 端注册
- * @param text UTF-8 编码的输入文本
  */
 using TextInputCallback = std::function<void(const std::string& text)>;
 
