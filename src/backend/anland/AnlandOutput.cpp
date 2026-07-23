@@ -12,6 +12,7 @@
 #include <cerrno>
 #include <chrono>
 
+// 日志宏
 #define ANLAND_TRACE(fmt, ...) do { fprintf(stderr, "[ANLAND][TRACE] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_DEBUG(fmt, ...) do { fprintf(stderr, "[ANLAND][DEBUG] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
 #define ANLAND_WARN(fmt, ...) do { fprintf(stderr, "[ANLAND][WARN] " fmt "\n", ##__VA_ARGS__); fflush(stderr); } while(0)
@@ -67,7 +68,7 @@ CAnlandOutput::CAnlandOutput(CAnlandBackend* backend)
         m_slots[i].accumDamage = CRegion();
     }
     m_shouldTriggerRefresh = false;
-    m_useDirectRendering = true; // Enable direct rendering bypass
+    m_useDirectRendering = true;
     ANLAND_TRACE("CAnlandOutput constructor END");
 }
 
@@ -116,7 +117,6 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setMode(mode);
     this->state->setFormat(m_drmFormat);
 
-    // Set default Gamma
     std::vector<uint16_t> defaultGamma;
     defaultGamma.resize(256 * 3);
     for (int i = 0; i < 256; i++) {
@@ -201,16 +201,6 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format)
         static_cast<float>(height) / 96.0f
     );
 
-    if (this->swapchain) {
-        SSwapchainOptions opts;
-        opts.length = m_bufferCount > 0 ? m_bufferCount : 3;
-        opts.size = Hyprutils::Math::Vector2D(static_cast<float>(width), static_cast<float>(height));
-        opts.format = m_drmFormat;
-        opts.scanout = true;
-        this->swapchain->reconfigure(opts);
-        ANLAND_DEBUG("updateMode: swapchain reconfigured to %dx%d fmt 0x%x", width, height, m_drmFormat);
-    }
-
     Hyprutils::Math::Vector2D size(static_cast<float>(width), static_cast<float>(height));
     events.state.emit(IOutput::SStateEvent{.size = size});
 }
@@ -245,7 +235,6 @@ bool CAnlandOutput::importBuffer(int index) {
     uint64_t modifier = info.modifier;
     
     // Force LINEAR modifier for compatibility with Turnip driver
-    // This is the key fix for FBO incompleteness
     if (modifier == DRM_FORMAT_MOD_INVALID || modifier == 0) {
         modifier = DRM_FORMAT_MOD_LINEAR;
         ANLAND_DEBUG("Converting modifier to LINEAR for compatibility (was 0x%lx)", info.modifier);
@@ -256,7 +245,7 @@ bool CAnlandOutput::importBuffer(int index) {
 
     // Create buffer with forced LINEAR modifier
     slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
-        new CAnlandDmaBuffer(fd, info, drmFormat, modifier, true)); // forceLinear=true
+        new CAnlandDmaBuffer(fd, info, drmFormat, modifier, true));
     close(fd);
 
     if (!slot->buffer->good()) {
@@ -265,9 +254,8 @@ bool CAnlandOutput::importBuffer(int index) {
         return false;
     }
 
-    // Create EGL image for direct rendering (bypasses CGLRenderbuffer issues)
+    // Try to create EGL image for direct rendering (optional)
     if (m_eglDisplay != EGL_NO_DISPLAY && eglCreateImageKHR) {
-        // Build EGL image attributes
         EGLint attribs[50];
         int idx = 0;
         
@@ -277,30 +265,38 @@ bool CAnlandOutput::importBuffer(int index) {
         attribs[idx++] = info.height;
         attribs[idx++] = EGL_LINUX_DRM_FOURCC_EXT;
         attribs[idx++] = drmFormat;
-        attribs[idx++] = EGL_DMA_BUF_PLANE0_FD_EXT;
-        attribs[idx++] = fd;
-        attribs[idx++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
-        attribs[idx++] = info.offset;
-        attribs[idx++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
-        attribs[idx++] = info.stride;
         
-        if (modifier != DRM_FORMAT_MOD_INVALID) {
-            attribs[idx++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
-            attribs[idx++] = (uint32_t)(modifier & 0xFFFFFFFF);
-            attribs[idx++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
-            attribs[idx++] = (uint32_t)(modifier >> 32);
-        }
-        
-        attribs[idx++] = EGL_IMAGE_PRESERVED_KHR;
-        attribs[idx++] = EGL_TRUE;
-        attribs[idx++] = EGL_NONE;
-        
-        slot->buffer->m_eglImage = eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT, 
-                                                     EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
-        if (slot->buffer->m_eglImage == EGL_NO_IMAGE_KHR) {
-            ANLAND_WARN("Failed to create EGL image for direct rendering, will use fallback path");
+        // 使用 dup 的 fd 或原始 fd
+        int dupFd = dup(fd);
+        if (dupFd >= 0) {
+            attribs[idx++] = EGL_DMA_BUF_PLANE0_FD_EXT;
+            attribs[idx++] = dupFd;
+            attribs[idx++] = EGL_DMA_BUF_PLANE0_OFFSET_EXT;
+            attribs[idx++] = info.offset;
+            attribs[idx++] = EGL_DMA_BUF_PLANE0_PITCH_EXT;
+            attribs[idx++] = info.stride;
+            
+            if (modifier != DRM_FORMAT_MOD_INVALID) {
+                attribs[idx++] = EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT;
+                attribs[idx++] = (uint32_t)(modifier & 0xFFFFFFFF);
+                attribs[idx++] = EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT;
+                attribs[idx++] = (uint32_t)(modifier >> 32);
+            }
+            
+            attribs[idx++] = EGL_IMAGE_PRESERVED_KHR;
+            attribs[idx++] = EGL_TRUE;
+            attribs[idx++] = EGL_NONE;
+            
+            slot->buffer->m_eglImage = eglCreateImageKHR(m_eglDisplay, EGL_NO_CONTEXT, 
+                                                         EGL_LINUX_DMA_BUF_EXT, nullptr, attribs);
+            if (slot->buffer->m_eglImage == EGL_NO_IMAGE_KHR) {
+                ANLAND_DEBUG("Failed to create EGL image for direct rendering, will use fallback path");
+                close(dupFd);
+            } else {
+                ANLAND_DEBUG("Created EGL image for direct rendering");
+            }
         } else {
-            ANLAND_DEBUG("Created EGL image for direct rendering");
+            ANLAND_DEBUG("Failed to dup fd for EGL image creation");
         }
     }
 
@@ -391,23 +387,16 @@ void CAnlandOutput::importBuffers() {
 }
 
 bool CAnlandOutput::test() {
-    // For Anland, test always succeeds as buffers are provided by consumer
     return true;
 }
 
 std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
     std::vector<SDRMFormat> formats;
 
-    // Priority order: ABGR8888 first, then fallbacks
-    // All using LINEAR modifier for compatibility
     formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
     formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
-
-    // Also support 10-bit formats
-    formats.push_back({.drmFormat = DRM_FORMAT_ABGR2101010, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
-    formats.push_back({.drmFormat = DRM_FORMAT_XBGR2101010, .modifiers = {DRM_FORMAT_MOD_LINEAR}});
 
     return formats;
 }
@@ -494,7 +483,6 @@ bool CAnlandOutput::commit() {
         }
     }
 
-    // DIRECT RENDERING PATH: Set buffer directly, bypassing swapchain
     if (slot.buffer) {
         state->setBuffer(slot.buffer);
 
@@ -529,23 +517,19 @@ bool CAnlandOutput::commit() {
                     set_render_fence(dpy, fenceFd);
                     ANLAND_DEBUG("commit: created render fence fd=%d", fenceFd);
                 } else {
-                    // Fallback: flush and hope for the best
                     glFlush();
                     ANLAND_DEBUG("commit: eglDupNativeFenceFDANDROID failed, using glFlush");
                 }
                 eglDestroySyncKHR(m_eglDisplay, sync);
             } else {
-                // Fallback: flush
                 glFlush();
                 ANLAND_DEBUG("commit: eglCreateSyncKHR failed, using glFlush");
             }
         } else {
-            // Fallback: flush
             glFlush();
             ANLAND_DEBUG("commit: explicit sync not available, using glFlush");
         }
     } else {
-        // Fallback: flush
         glFlush();
         ANLAND_DEBUG("commit: no EGL context, using glFlush");
     }
@@ -598,7 +582,6 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     m_frameScheduled = true;
     this->needsFrame = true;
 
-    // Update damage accumulation for the current buffer
     if (m_buffersImported && m_selectedIndex < m_bufferCount) {
         auto& slot = m_slots[m_selectedIndex];
         if (slot.imported && slot.buffer) {
@@ -658,7 +641,6 @@ void CAnlandOutput::onBufferReady() {
         }
     }
 
-    // Release the buffer that was just presented
     if (m_selectedIndex >= 0 && m_selectedIndex < m_bufferCount) {
         auto& slot = m_slots[m_selectedIndex];
         if (slot.buffer) {
@@ -757,7 +739,6 @@ CSharedPointer<IBackendImplementation> CAnlandOutput::getBackend() {
 void CAnlandOutput::setEGL(EGLDisplay dpy, EGLContext ctx) {
     m_eglDisplay = dpy;
     m_eglContext = ctx;
-    // Pass EGL display to buffer creation
     anland_set_egl_display(dpy);
 }
 
