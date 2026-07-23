@@ -283,48 +283,45 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -686,10 +732,32 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -686,6 +732,29 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
      };
      // clang-format on
  
 +    // Anland: 强制使用 LINEAR modifier 格式
-+    // 这确保 EGL 导入的 dmabuf 与渲染目标兼容
++    bool formatSet = false;
 +    if (isAnlandBackend(m_output)) {
 +        // 优先使用 ABGR8888 with LINEAR modifier
 +        m_output->state->setFormat(DRM_FORMAT_ABGR8888);
-+        // 尝试提交状态
 +        if (m_state.test()) {
 +            m_drmFormat = DRM_FORMAT_ABGR8888;
 +            Log::logger->log(Log::DEBUG, "Anland: Using ABGR8888 format with LINEAR modifier");
-+            goto after_format_selection;
++            formatSet = true;
++        } else {
++            // 如果 ABGR8888 失败，尝试 XRGB8888
++            m_output->state->setFormat(DRM_FORMAT_XRGB8888);
++            if (m_state.test()) {
++                m_drmFormat = DRM_FORMAT_XRGB8888;
++                Log::logger->log(Log::DEBUG, "Anland: Using XRGB8888 format with LINEAR modifier");
++                formatSet = true;
++            }
 +        }
-+        // 如果 ABGR8888 失败，尝试 XRGB8888
-+        m_output->state->setFormat(DRM_FORMAT_XRGB8888);
-+        if (m_state.test()) {
-+            m_drmFormat = DRM_FORMAT_XRGB8888;
-+            Log::logger->log(Log::DEBUG, "Anland: Using XRGB8888 format with LINEAR modifier");
-+            goto after_format_selection;
++        if (!formatSet) {
++            Log::logger->log(Log::WARN, "Anland: Format test failed, falling back to standard format selection");
 +        }
-+        Log::logger->log(Log::WARN, "Anland: Format test failed, falling back to standard format selection");
 +    }
 +
      bool set10bit = false;
  
      for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
-         m_output->state->setFormat(fmt.second);
-+        // 对于 Anland，强制使用 LINEAR modifier（由后端处理）
-         m_prevDrmFormat = m_drmFormat;
-         m_drmFormat     = fmt.second;
- 
-@@ -701,6 +769,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -701,6 +771,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
-+after_format_selection:
++    // if formatSet is true, set10bit remains false and standard loop is skipped
  
      m_enabled10bit = set10bit;
  
-@@ -2676,5 +2745,13 @@ bool CMonitor::useFP16() {
+@@ -2676,5 +2747,13 @@ bool CMonitor::useFP16() {
  PImageDescription CMonitor::workBufferImageDescription() {
      static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
  
@@ -403,7 +400,7 @@ diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
      if (EGLEXTENSIONS.contains("EGL_EXT_device_base") || EGLEXTENSIONS.contains("EGL_EXT_device_enumeration"))
          loadGLProc(&m_proc.eglQueryDevicesEXT, "eglQueryDevicesEXT");
  
-@@ -1110,6 +1117,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
+@@ -1110,6 +1116,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
  void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, const STextureRenderData& data) {
      RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
      RASSERT(tex, "Attempted to draw nullptr texture!");
