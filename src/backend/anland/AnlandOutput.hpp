@@ -22,8 +22,9 @@ extern "C" {
 #include "display_producer.h"
 }
 
-// 不再依赖 Hyprland 的颜色管理
-// 使用简单的 void* 来存储描述，避免类型依赖
+// Forward declare EGL functions used for direct rendering
+extern PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR;
+extern PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR;
 
 namespace Aquamarine {
 
@@ -33,13 +34,6 @@ using Hyprutils::Memory::makeShared;
 class CAnlandBackend;
 class CAnlandDmaBuffer;
 
-/**
- * Anland output implementation with:
- * - Incremental damage tracking (buffer-age)
- * - Dynamic format selection
- * - EGL fence synchronization
- * - Multi-buffer support
- */
 class CAnlandOutput : public IOutput {
 public:
     explicit CAnlandOutput(CAnlandBackend* backend);
@@ -62,7 +56,7 @@ public:
     virtual void setCursorVisible(bool visible) override {}
     virtual Hyprutils::Math::Vector2D cursorPlaneSize() override { return {-1, -1}; }
 
-    // Anland 特有
+    // Anland specific
     bool initialize(uint32_t width, uint32_t height, uint32_t refresh);
     void releaseBuffers();
     void updateRefreshRate(uint32_t refresh);
@@ -71,19 +65,13 @@ public:
     bool isInFallback() const { return m_inFallback; }
     void onBufferReady();
 
-    // 用于 CAnlandAllocator
+    // For CAnlandAllocator (kept for compatibility but not used in direct rendering)
     int getBufferCount() const { return m_bufferCount; }
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
     CSharedPointer<CBackend> getCBackend() const;
 
-    // EGL 上下文管理
-    void setEGL(EGLDisplay dpy, EGLContext ctx) { 
-        m_eglDisplay = dpy; 
-        m_eglContext = ctx; 
-    }
-
-    // ImageDescription 管理 - 使用 void* 避免类型依赖
-    // 注意：这个指针由 Hyprland 管理，Anland 只存储和传递
+    // EGL context management
+    void setEGL(EGLDisplay dpy, EGLContext ctx);
     void setImageDescription(void* desc) { m_imageDescription = desc; }
     void* getImageDescription() const { return m_imageDescription; }
 
@@ -96,10 +84,9 @@ private:
     bool importBuffer(int index);
     void destroyBuffer(int index);
     void importBuffers();
-    void reconfigureSwapchain();
     void updateMode(uint32_t width, uint32_t height, uint32_t format);
 
-    // 损伤跟踪
+    // Damage tracking
     struct BufferSlot {
         int fd = -1;
         uint32_t width = 0, height = 0;
@@ -134,12 +121,13 @@ private:
     uint32_t m_refresh = 60000;
     uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
 
-    // EGL 上下文
+    // Direct rendering: bypass swapchain for FBO stability
+    bool m_useDirectRendering = true;
+
+    // EGL context
     EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
     EGLContext m_eglContext = EGL_NO_CONTEXT;
 
-    // ImageDescription - 使用 void* 避免对 Hyprland 类型的依赖
-    // Hyprland 端通过 setImageDescription() 设置，Anland 只负责存储和传递
     void* m_imageDescription = nullptr;
 
     mutable std::mutex m_bufferMutex;

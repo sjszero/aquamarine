@@ -1,3 +1,22 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -286,6 +286,15 @@ if(USE_TRACY)
+   endif()
+ endif()
+ 
++# ============================================================
++# Anland 后端支持
++# ============================================================
++option(ENABLE_ANLAND "Enable Anland (Android display) backend" OFF)
++if(ENABLE_ANLAND)
++    add_compile_definitions(HAS_ANLAND_BACKEND)
++    message(STATUS "Anland backend support enabled")
++endif()
++
+ if(BUILT_WITH_NIX)
+   add_compile_definitions(BUILT_WITH_NIX)
+ endif()
 diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 --- a/src/Compositor.cpp
 +++ b/src/Compositor.cpp
@@ -68,11 +87,11 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      m_aqBackend = CBackend::create(implementations, options);
  
-@@ -562,6 +595,48 @@ void CCompositor::initAllSignals() {
+@@ -562,6 +595,58 @@ void CCompositor::initAllSignals() {
          });
      }
  }
- 
++
 +// Anland: 传递 EGL 上下文到 Anland 后端
 +static void passEGLToAnlandBackend(SP<Aquamarine::CBackend> backend) {
 +#ifdef HAS_ANLAND_BACKEND
@@ -106,6 +125,16 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +                Log::logger->log(Log::WARN, "Anland: Explicit sync NOT supported, falling back to implicit sync");
 +            }
 +
++            // Anland: 设置 EGL 平台为 surfaceless（已在 main.cpp 中设置）
++            // 确保 EGL 上下文正确绑定
++            if (eglGetCurrentContext() != ctx) {
++                if (eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx) == EGL_FALSE) {
++                    Log::logger->log(Log::ERR, "Anland: Failed to make EGL context current");
++                } else {
++                    Log::logger->log(Log::DEBUG, "Anland: EGL context made current");
++                }
++            }
++
 +            Log::logger->log(Log::DEBUG, "Anland: EGL context passed to Anland backend");
 +
 +            // 只需要传递给第一个 Anland 后端
@@ -114,20 +143,25 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
 +    }
 +#endif
 +}
-+
+ 
  void CCompositor::removeAllSignals() {
      ;
-@@ -625,6 +700,9 @@ void CCompositor::initManagers(eManagersInitStage stage) {
+@@ -625,6 +711,14 @@ void CCompositor::initManagers(eManagersInitStage stage) {
  
          } break;
          case STAGE_LATE: {
 +            // Anland: 在 OpenGL 初始化后传递 EGL 上下文
-+            passEGLToAnlandBackend(m_aqBackend);
++            // 注意：此时 g_pHyprOpenGL 已初始化但可能还未完成 shader 编译
++            // 使用 doLater 确保在事件循环中稍后执行
++            g_pEventLoopManager->doLater([this]() {
++                passEGLToAnlandBackend(m_aqBackend);
++                Log::logger->log(Log::DEBUG, "Anland: EGL context passed via doLater");
++            });
 +
              Log::logger->log(Log::DEBUG, "Creating CHyprCtl");
              g_pHyprCtl = makeUnique<CHyprCtl>();
  
-@@ -1064,6 +1142,13 @@ void CCompositor::createLockFile() {
+@@ -1064,6 +1158,13 @@ void CCompositor::createLockFile() {
  
  void CCompositor::removeLockFile() {
      const auto PATH = m_instancePath + "/hyprland.lock";
@@ -141,7 +175,7 @@ diff --git a/src/Compositor.cpp b/src/Compositor.cpp
  
      if (std::filesystem::exists(PATH))
          std::filesystem::remove(PATH);
-@@ -1092,6 +1177,10 @@ void CCompositor::cleanup() {
+@@ -1092,6 +1193,10 @@ void CCompositor::cleanup() {
  
      m_isShuttingDown = true;
  
@@ -173,201 +207,6 @@ diff --git a/src/Compositor.hpp b/src/Compositor.hpp
  
      NColorManagement::PImageDescription getPreferredImageDescription();
      NColorManagement::PImageDescription getHDRImageDescription();
-diff --git a/src/main.cpp b/src/main.cpp
---- a/src/main.cpp
-+++ b/src/main.cpp
-@@ -37,6 +37,7 @@ static void help() {
-     --i-am-really-stupid         - Omits root user privileges check (why would you do that?)
-     --verify-config              - Do not run Hyprland, only print if the config has any errors
-     --version           -v       - Print this binary's version
--    --version-json               - Print this binary's version as json)#");
-+    --version-json               - Print this binary's version as json)
-+    --anland                     - Use the Anland virtual display backend (Android display) )#");
- }
- 
-@@ -55,6 +56,9 @@ static void reapZombieChildrenAutomatically() {
- 
- int main(int argc, char** argv) {
- 
-+    // Anland virtual display backend
-+    bool wantAnland = false;
-+
-     if (!getenv("XDG_RUNTIME_DIR"))
-         throwError("XDG_RUNTIME_DIR is not set!");
- 
-@@ -174,6 +178,8 @@ int main(int argc, char** argv) {
-             } else if (value == "--safe-mode") {
-                 safeMode = true;
-                 continue;
-+            } else if (value == "--anland") {
-+                wantAnland = true;
-             } else if (value == "--watchdog-fd") {
-                 if (std::next(it) == args.end()) {
-                     help();
-@@ -184,6 +190,15 @@ int main(int argc, char** argv) {
-         }
-     }
- 
-+    // Anland: 设置虚拟设备环境变量
-+    if (wantAnland) {
-+        setenv("ANLAND", "1", 1);
-+        if (!getenv("ANLAND_SOCKET")) {
-+            setenv("ANLAND_SOCKET", "/run/display.sock", 1);
-+        }
-+        setenv("EGL_PLATFORM", "surfaceless", 1);
-+    }
-+
-     if (!ignoreSudo && NInit::isSudo()) {
-         std::println(stderr,
-                      "[ ERROR ] Hyprland was launched with superuser privileges, but the privileges check is not omitted.\n"
-diff --git a/CMakeLists.txt b/CMakeLists.txt
---- a/CMakeLists.txt
-+++ b/CMakeLists.txt
-@@ -286,6 +286,15 @@ if(USE_TRACY)
-   endif()
- endif()
- 
-+# ============================================================
-+# Anland 后端支持
-+# ============================================================
-+option(ENABLE_ANLAND "Enable Anland (Android display) backend" OFF)
-+if(ENABLE_ANLAND)
-+    add_compile_definitions(HAS_ANLAND_BACKEND)
-+    message(STATUS "Anland backend support enabled")
-+endif()
-+
- if(BUILT_WITH_NIX)
-   add_compile_definitions(BUILT_WITH_NIX)
- endif()
-diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
---- a/src/render/OpenGL.hpp
-+++ b/src/render/OpenGL.hpp
-@@ -68,6 +68,11 @@ namespace Render::GL {
-         EGLDisplay                     m_eglDisplay = nullptr;
-         EGLDeviceEXT                   m_eglDevice  = nullptr;
- 
-+        // 公开 EGL 成员以便 Anland 后端访问
-+        EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
-+        EGLContext getEGLContext() const { return m_eglContext; }
-+        bool explicitSyncSupported() const { return m_exts.EGL_ANDROID_native_fence_sync_ext; }
-+
-         std::map<PHLMONITORREF, SP<IFramebuffer>> m_monitorBGFBs;
- 
-         struct {
-diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
---- a/src/render/OpenGL.cpp
-+++ b/src/render/OpenGL.cpp
-@@ -975,7 +975,9 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
-         shaders->TEXVERTSRC    = shaderLoader->process("tex300.vert");
-         shaders->TEXVERTSRC320 = shaderLoader->process("tex320.vert");
- 
--        m_cmSupported = *PCM;
-+        // Anland: 强制禁用颜色管理，避免因 ImageDescription 缺失导致崩溃
-+        // m_cmSupported = *PCM;
-+        m_cmSupported = false;
- 
-         g_pShaderLoader = std::move(shaderLoader);
- 
-@@ -1110,6 +1112,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
- void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, const STextureRenderData& data) {
-     RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
-     RASSERT(tex, "Attempted to draw nullptr texture!");
-+
-+    // Anland: 如果纹理无效，直接返回避免崩溃
-+    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0 && !tex->ok()) {
-+        Log::logger->log(Log::WARN, "Anland: skipping invalid texture render");
-+        return;
-+    }
-+
-     RASSERT(tex->ok(), "Attempted to draw invalid texture!");
- 
-     TRACY_GPU_ZONE("RenderTextureInternalWithDamage");
-diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
---- a/src/render/Renderer.cpp
-+++ b/src/render/Renderer.cpp
-@@ -2444,6 +2444,15 @@ CHyprColor IHyprRenderer::getConvertedColor(const CHyprColor& color) {
-     const auto DESCR = m_renderData.currentFB ? m_renderData.currentFB->imageDescription() : workBufferImageDescription();
- 
-     if (!DESCR) {
-+        // Anland 后端：如果没有 ImageDescription，直接返回原始颜色
-+        // 这避免了因颜色管理缺失导致的崩溃
-+        if (getenv("ANLAND")) {
-+            Log::logger->log(Log::WARN, "getConvertedColor: no image description for Anland, returning raw color");
-+            return color;
-+        }
-+        // 非 Anland 后端：记录错误并返回原始颜色
-+        Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
-+        return color;
-         Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
-         return color;
-     }
-diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
---- a/src/render/pass/Pass.cpp
-+++ b/src/render/pass/Pass.cpp
-@@ -5,6 +5,7 @@
- #include <ranges>
- #include "../../Compositor.hpp"
- #include "../../config/ConfigValue.hpp"
-+#include <cstring>
- #include "../../desktop/view/WLSurface.hpp"
- #include "../../managers/SeatManager.hpp"
- #include "../../managers/eventLoop/EventLoopManager.hpp"
-@@ -53,6 +54,15 @@ void CRenderPass::add(UP<IPassElement>&& el) {
- 
- void CRenderPass::simplify(bool willBlur, const CRegion& liveBlurRegion) {
-     const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
-+
-+    // Anland: 完全禁用简化 pass
-+    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
-+        for (auto& el : m_passElements) {
-+            el->elementDamage = m_damage;
-+        }
-+        return;
-+    }
-+
-     static auto PDEBUGPASS = CConfigValue<Config::INTEGER>("debug:pass");
- 
-     // TODO: use precompute blur for instances where there is nothing in between
-@@ -157,6 +168,14 @@ CRegion CRenderPass::render(const CRegion& damage_) {
-     const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
-     static auto PDEBUGPASS = CConfigValue<Config::INTEGER>("debug:pass");
- 
-+    // Anland: 如果没有有效的 monitor，直接返回空区域
-+    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0 && !pMonitor) {
-+        g_pHyprRenderer->m_renderData.damage = CRegion{};
-+        g_pHyprRenderer->m_renderData.finalDamage = CRegion{};
-+        m_damage = CRegion{};
-+        return CRegion{};
-+    }
-+
-     // single pass: cache blur results and gather aggregate info
-     bool    willBlur = false, willDisableSimplification = false, willPrecomputeBlur = false;
-     CRegion blurRegion;
-@@ -191,6 +210,14 @@ CRegion CRenderPass::render(const CRegion& damage_) {
-     } else
-         g_pHyprRenderer->m_renderData.finalDamage = m_damage;
- 
-+    // Anland: 如果 noSimplify 为 true，跳过 simplify
-+    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
-+        // 已经在 simplify 中处理了，但为了确保，强制设置 noSimplify
-+        g_pHyprRenderer->m_renderData.noSimplify = true;
-+        // 直接跳过 simplify 调用
-+        goto after_simplify;
-+    }
-+
-     if (g_pHyprRenderer->m_renderData.noSimplify || willDisableSimplification) {
-         for (auto& el : m_passElements) {
-             el->elementDamage = m_damage;
-@@ -198,8 +225,9 @@ CRegion CRenderPass::render(const CRegion& damage_) {
-     } else
-         simplify(willBlur, liveBlurRegion);
- 
-+after_simplify:
-     if (g_pHyprRenderer->m_renderData.pMonitor)
-         g_pHyprRenderer->m_renderData.pMonitor->m_blurFBShouldRender = willPrecomputeBlur;
- 
-     if (m_passElements.empty())
-         return {};
 diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 --- a/src/helpers/Monitor.cpp
 +++ b/src/helpers/Monitor.cpp
@@ -432,7 +271,7 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      if ((minLuminance() >= 0 || maxLuminance() > 0) && (cmType == NCMType::CM_HDR || cmType == NCMType::CM_HDR_EDID))
          m_imageDescription = m_imageDescription->with({
              .min       = minLuminance() >= 0 ? minLuminance() : m_imageDescription->value().luminances.min, //
-@@ -510,6 +551,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -510,6 +550,12 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
  
      const bool sameDrmMode = !std::memcmp(&m_customDrmMode, &RULE->m_drmMode, sizeof(m_customDrmMode));
  
@@ -445,42 +284,48 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -686,9 +733,25 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -686,10 +732,32 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
      };
      // clang-format on
  
-     bool set10bit = false;
- 
-+    // Anland: 强制优先使用 ABGR8888
++    // Anland: 强制使用 LINEAR modifier 格式
++    // 这确保 EGL 导入的 dmabuf 与渲染目标兼容
 +    if (isAnlandBackend(m_output)) {
-+        uint32_t anlandFormat = DRM_FORMAT_ABGR8888;
-+        m_output->state->setFormat(anlandFormat);
-+        m_prevDrmFormat = m_drmFormat;
-+        m_drmFormat     = anlandFormat;
-+
++        // 优先使用 ABGR8888 with LINEAR modifier
++        m_output->state->setFormat(DRM_FORMAT_ABGR8888);
++        // 尝试提交状态
 +        if (m_state.test()) {
-+            Log::logger->log(Log::DEBUG, "Anland: Using ABGR8888 format");
-+            set10bit = false;
++            m_drmFormat = DRM_FORMAT_ABGR8888;
++            Log::logger->log(Log::DEBUG, "Anland: Using ABGR8888 format with LINEAR modifier");
 +            goto after_format_selection;
 +        }
-+        Log::logger->log(Log::WARN, "Anland: ABGR8888 test failed, falling back to standard format selection");
++        // 如果 ABGR8888 失败，尝试 XRGB8888
++        m_output->state->setFormat(DRM_FORMAT_XRGB8888);
++        if (m_state.test()) {
++            m_drmFormat = DRM_FORMAT_XRGB8888;
++            Log::logger->log(Log::DEBUG, "Anland: Using XRGB8888 format with LINEAR modifier");
++            goto after_format_selection;
++        }
++        Log::logger->log(Log::WARN, "Anland: Format test failed, falling back to standard format selection");
 +    }
 +
-+    // 标准格式选择循环
+     bool set10bit = false;
+ 
      for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
          m_output->state->setFormat(fmt.second);
++        // 对于 Anland，强制使用 LINEAR modifier（由后端处理）
          m_prevDrmFormat = m_drmFormat;
          m_drmFormat     = fmt.second;
-@@ -701,7 +764,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+ 
+@@ -701,6 +769,7 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
- 
 +after_format_selection:
+ 
      m_enabled10bit = set10bit;
  
-     m_supportsWideColor = RULE->m_supportsWideColor;
-@@ -2676,5 +2740,13 @@ bool CMonitor::useFP16() {
+@@ -2676,5 +2745,13 @@ bool CMonitor::useFP16() {
  PImageDescription CMonitor::workBufferImageDescription() {
      static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
  
@@ -494,3 +339,185 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +
      if (!useFP16() && !m_imageDescription->value().icc.present)
          return m_imageDescription;
+diff --git a/src/main.cpp b/src/main.cpp
+--- a/src/main.cpp
++++ b/src/main.cpp
+@@ -37,6 +37,7 @@ static void help() {
+     --i-am-really-stupid         - Omits root user privileges check (why would you do that?)
+     --verify-config              - Do not run Hyprland, only print if the config has any errors
+     --version           -v       - Print this binary's version
+-    --version-json               - Print this binary's version as json)#");
++    --version-json               - Print this binary's version as json)
++    --anland                     - Use the Anland virtual display backend (Android display) )#");
+ }
+ 
+@@ -55,6 +56,9 @@ static void reapZombieChildrenAutomatically() {
+ 
+ int main(int argc, char** argv) {
+ 
++    // Anland virtual display backend
++    bool wantAnland = false;
++
+     if (!getenv("XDG_RUNTIME_DIR"))
+         throwError("XDG_RUNTIME_DIR is not set!");
+ 
+@@ -174,6 +178,8 @@ int main(int argc, char** argv) {
+             } else if (value == "--safe-mode") {
+                 safeMode = true;
+                 continue;
++            } else if (value == "--anland") {
++                wantAnland = true;
+             } else if (value == "--watchdog-fd") {
+                 if (std::next(it) == args.end()) {
+                     help();
+@@ -184,6 +190,16 @@ int main(int argc, char** argv) {
+         }
+     }
+ 
++    // Anland: 设置虚拟设备环境变量
++    if (wantAnland) {
++        setenv("ANLAND", "1", 1);
++        if (!getenv("ANLAND_SOCKET")) {
++            setenv("ANLAND_SOCKET", "/run/display.sock", 1);
++        }
++        setenv("EGL_PLATFORM", "surfaceless", 1);
++        setenv("MESA_LOADER_DRIVER_OVERRIDE", "kgsl", 1);
++    }
++
+     if (!ignoreSudo && NInit::isSudo()) {
+         std::println(stderr,
+                      "[ ERROR ] Hyprland was launched with superuser privileges, but the privileges check is not omitted.\n"
+diff --git a/src/render/OpenGL.cpp b/src/render/OpenGL.cpp
+--- a/src/render/OpenGL.cpp
++++ b/src/render/OpenGL.cpp
+@@ -975,7 +975,14 @@ bool CHyprOpenGLImpl::initShaders(const std::string& path) {
+     RASSERT(m_proc.eglCreateSyncKHR, "Display driver doesn't support eglCreateSyncKHR");
+     RASSERT(m_proc.eglDupNativeFenceFDANDROID, "Display driver doesn't support eglDupNativeFenceFDANDROID");
+     RASSERT(m_proc.eglWaitSyncKHR, "Display driver doesn't support eglWaitSyncKHR");
+ 
++        // Anland: 强制禁用颜色管理，避免因 ImageDescription 缺失导致崩溃
++        // 在 Anland 后端中，颜色管理由后端处理
++        if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++            m_cmSupported = false;
++        } else {
++            m_cmSupported = *PCM;
++        }
+     if (EGLEXTENSIONS.contains("EGL_EXT_device_base") || EGLEXTENSIONS.contains("EGL_EXT_device_enumeration"))
+         loadGLProc(&m_proc.eglQueryDevicesEXT, "eglQueryDevicesEXT");
+ 
+@@ -1110,6 +1113,13 @@ void CHyprOpenGLImpl::renderTexture(SP<ITexture> tex, const CBox& box, STextureR
+ void CHyprOpenGLImpl::renderTextureInternal(SP<ITexture> tex, const CBox& box, const STextureRenderData& data) {
+     RASSERT(g_pHyprRenderer->m_renderData.pMonitor, "Tried to render texture without begin()!");
+     RASSERT(tex, "Attempted to draw nullptr texture!");
++
++    // Anland: 如果纹理无效，直接返回避免崩溃
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0 && !tex->ok()) {
++        Log::logger->log(Log::WARN, "Anland: skipping invalid texture render");
++        return;
++    }
++
+     RASSERT(tex->ok(), "Attempted to draw invalid texture!");
+ 
+     TRACY_GPU_ZONE("RenderTextureInternalWithDamage");
+diff --git a/src/render/OpenGL.hpp b/src/render/OpenGL.hpp
+--- a/src/render/OpenGL.hpp
++++ b/src/render/OpenGL.hpp
+@@ -68,6 +68,12 @@ namespace Render::GL {
+         EGLDisplay                     m_eglDisplay = nullptr;
+         EGLDeviceEXT                   m_eglDevice  = nullptr;
+ 
++        // 公开 EGL 成员以便 Anland 后端访问
++        EGLDisplay getEGLDisplay() const { return m_eglDisplay; }
++        EGLContext getEGLContext() const { return m_eglContext; }
++        bool explicitSyncSupported() const { return m_exts.EGL_ANDROID_native_fence_sync_ext; }
++        bool isNvidia() const { return m_nvidia; }
++
+         std::map<PHLMONITORREF, SP<IFramebuffer>> m_monitorBGFBs;
+ 
+         struct {
+diff --git a/src/render/Renderer.cpp b/src/render/Renderer.cpp
+--- a/src/render/Renderer.cpp
++++ b/src/render/Renderer.cpp
+@@ -2444,6 +2444,15 @@ CHyprColor IHyprRenderer::getConvertedColor(const CHyprColor& color) {
+     const auto DESCR = m_renderData.currentFB ? m_renderData.currentFB->imageDescription() : workBufferImageDescription();
+ 
+     if (!DESCR) {
++        // Anland 后端：如果没有 ImageDescription，直接返回原始颜色
++        // 这避免了因颜色管理缺失导致的崩溃
++        if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++            Log::logger->log(Log::WARN, "getConvertedColor: no image description for Anland, returning raw color");
++            return color;
++        }
++        // 非 Anland 后端：记录错误并返回原始颜色
++        Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
++        return color;
+         Log::logger->log(Log::ERR, "getConvertedColor: failed to get image description");
+         return color;
+     }
+diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
+--- a/src/render/pass/Pass.cpp
++++ b/src/render/pass/Pass.cpp
+@@ -5,6 +5,7 @@
+ #include <ranges>
+ #include "../../Compositor.hpp"
+ #include "../../config/ConfigValue.hpp"
++#include <cstring>
+ #include "../../desktop/view/WLSurface.hpp"
+ #include "../../managers/SeatManager.hpp"
+ #include "../../managers/eventLoop/EventLoopManager.hpp"
+@@ -53,6 +54,15 @@ void CRenderPass::add(UP<IPassElement>&& el) {
+ 
+ void CRenderPass::simplify(bool willBlur, const CRegion& liveBlurRegion) {
+     const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
++
++    // Anland: 完全禁用简化 pass，避免复杂的损伤区域优化
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++        for (auto& el : m_passElements) {
++            el->elementDamage = m_damage;
++        }
++        return;
++    }
++
+     static auto PDEBUGPASS = CConfigValue<Config::INTEGER>("debug:pass");
+ 
+     // TODO: use precompute blur for instances where there is nothing in between
+@@ -157,6 +167,14 @@ CRegion CRenderPass::render(const CRegion& damage_) {
+     const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
+     static auto PDEBUGPASS = CConfigValue<Config::INTEGER>("debug:pass");
+ 
++    // Anland: 如果没有有效的 monitor，直接返回空区域
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0 && !pMonitor) {
++        g_pHyprRenderer->m_renderData.damage = CRegion{};
++        g_pHyprRenderer->m_renderData.finalDamage = CRegion{};
++        m_damage = CRegion{};
++        return CRegion{};
++    }
++
+     // single pass: cache blur results and gather aggregate info
+     bool    willBlur = false, willDisableSimplification = false, willPrecomputeBlur = false;
+     CRegion blurRegion;
+@@ -191,6 +209,14 @@ CRegion CRenderPass::render(const CRegion& damage_) {
+     } else
+         g_pHyprRenderer->m_renderData.finalDamage = m_damage;
+ 
++    // Anland: 跳过 simplify 并强制 noSimplify
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
++        // 已经在 simplify 中处理了，但为了确保，强制设置 noSimplify
++        g_pHyprRenderer->m_renderData.noSimplify = true;
++        // 直接跳过 simplify 调用
++        goto after_simplify;
++    }
++
+     if (g_pHyprRenderer->m_renderData.noSimplify || willDisableSimplification) {
+         for (auto& el : m_passElements) {
+             el->elementDamage = m_damage;
+@@ -198,8 +224,9 @@ CRegion CRenderPass::render(const CRegion& damage_) {
+     } else
+         simplify(willBlur, liveBlurRegion);
+ 
++after_simplify:
+     if (g_pHyprRenderer->m_renderData.pMonitor)
+         g_pHyprRenderer->m_renderData.pMonitor->m_blurFBShouldRender = willPrecomputeBlur;
+ 
+     if (m_passElements.empty())
+         return {};
