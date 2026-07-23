@@ -283,11 +283,11 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
      const bool sameAutoDir      = m_autoDir == RULE->m_autoDir;
      const bool sameReservedArea = m_reservedArea == RULE->m_reservedArea;
  
-@@ -686,6 +732,30 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -686,6 +732,29 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
      };
      // clang-format on
  
-+    // Anland: 强制使用 LINEAR modifier 格式
++    // Anland: 强制使用 LINEAR modifier 格式，避免隐式修饰符问题
 +    bool formatSet = false;
 +    if (isAnlandBackend(m_output)) {
 +        // 优先使用 ABGR8888 with LINEAR modifier
@@ -305,25 +305,24 @@ diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 +                formatSet = true;
 +            }
 +        }
-+        if (formatSet) {
-+            // Anland 格式已设置，跳过标准格式循环
-+            goto skip_standard_format_loop;
++        if (!formatSet) {
++            Log::logger->log(Log::WARN, "Anland: Format test failed, falling back to standard format selection");
 +        }
 +    }
 +
      bool set10bit = false;
  
      for (auto const& fmt : formats[sc<int>(!RULE->m_enable10bit)]) {
-@@ -700,6 +770,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
+@@ -701,6 +769,8 @@ bool CMonitor::applyMonitorRule(Config::CMonitorRule&& pMonitorRule, bool force)
              break;
          }
      }
-+
-+skip_standard_format_loop:
++    // 注意：如果 formatSet 为 true，set10bit 保持 false（Anland 强制 8-bit）
++    // 标准循环被跳过，因为 formatSet 为 true 时不会进入循环
  
      m_enabled10bit = set10bit;
  
-@@ -2676,5 +2748,13 @@ bool CMonitor::useFP16() {
+@@ -2676,5 +2746,13 @@ bool CMonitor::useFP16() {
  PImageDescription CMonitor::workBufferImageDescription() {
      static const auto PFP16TF = CConfigValue<Hyprlang::INT>("render:fp16_sdr_tf");
  
