@@ -298,14 +298,11 @@ diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
  #include "../../desktop/view/WLSurface.hpp"
  #include "../../managers/SeatManager.hpp"
  #include "../../managers/eventLoop/EventLoopManager.hpp"
-@@ -53,6 +54,17 @@ void CRenderPass::add(UP<IPassElement>&& el) {
- 
+@@ -54,5 +55,14 @@ void CRenderPass::add(UP<IPassElement>&& el) {
  void CRenderPass::simplify(bool willBlur, const CRegion& liveBlurRegion) {
      const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
 +
-+    // Anland: 完全禁用简化 pass，避免因 ImageDescription 缺失导致崩溃
-+    // Hyprland 的 simplify 依赖 ImageDescription 做颜色管理优化，
-+    // Anland 后端禁用颜色管理后此优化不再需要，直接跳过。
++    // Anland: 完全禁用简化 pass
 +    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
 +        for (auto& el : m_passElements) {
 +            el->elementDamage = m_damage;
@@ -317,20 +314,20 @@ diff --git a/src/render/pass/Pass.cpp b/src/render/pass/Pass.cpp
  
      // TODO: use precompute blur for instances where there is nothing in between
 @@ -157,6 +168,14 @@ CRegion CRenderPass::render(const CRegion& damage_) {
-     } else
-         g_pHyprRenderer->m_renderData.finalDamage = m_damage;
+     const auto  pMonitor   = g_pHyprRenderer->m_renderData.pMonitor;
+     static auto PDEBUGPASS = CConfigValue<Config::INTEGER>("debug:pass");
  
-+    // Anland: 如果简化被禁用（通过环境变量），跳过 simplify
-+    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0) {
-+        // 已经在 simplify 中处理了，这里不需要额外操作
-+        // 但为了确保，强制设置 noSimplify
-+        g_pHyprRenderer->m_renderData.noSimplify = true;
++    // Anland: 如果没有有效的 monitor，直接返回空区域
++    if (getenv("ANLAND") && strcmp(getenv("ANLAND"), "1") == 0 && !pMonitor) {
++        g_pHyprRenderer->m_renderData.damage = CRegion{};
++        g_pHyprRenderer->m_renderData.finalDamage = CRegion{};
++        m_damage = CRegion{};
++        return CRegion{};
 +    }
 +
-+    // 如果 noSimplify 为 true，跳过 simplify
-     if (g_pHyprRenderer->m_renderData.noSimplify || willDisableSimplification) {
-         for (auto& el : m_passElements) {
-             el->elementDamage = m_damage;
+     // single pass: cache blur results and gather aggregate info
+     bool    willBlur = false, willDisableSimplification = false, willPrecomputeBlur = false;
+     CRegion blurRegion;
 diff --git a/src/helpers/Monitor.cpp b/src/helpers/Monitor.cpp
 --- a/src/helpers/Monitor.cpp
 +++ b/src/helpers/Monitor.cpp
