@@ -623,11 +623,13 @@ jobs:
           # Fix 1: Add AnlandBuffer.hpp include to make CAnlandDmaBuffer full type visible
           # (CSharedPointer upcast from CAnlandDmaBuffer to IBuffer needs full type definition)
           MONITOR_CPP="src/helpers/Monitor.cpp"
-          if grep -q '#include.*AnlandBuffer' "$MONITOR_CPP" 2>/dev/null; then
+          if grep -q 'AnlandBuffer' "$MONITOR_CPP" 2>/dev/null; then
             echo "   ✅ Include already present"
           else
             echo "   📝 Adding #include <aquamarine/backend/anland/AnlandBuffer.hpp>"
-            sed -i '1i#ifdef HAS_ANLAND_BACKEND\n#include <aquamarine/backend/anland/AnlandBuffer.hpp>\n#endif' "$MONITOR_CPP"
+            # Use cat + heredoc to prepend reliably (sed \n may not work on all systems)
+            { echo '#include <aquamarine/backend/anland/AnlandBuffer.hpp>'; cat "$MONITOR_CPP"; } > "${MONITOR_CPP}.new"
+            mv "${MONITOR_CPP}.new" "$MONITOR_CPP"
             echo "   ✅ Include added"
           fi
           
