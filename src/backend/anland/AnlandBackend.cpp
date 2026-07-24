@@ -581,23 +581,23 @@ void CAnlandBackend::deferFrameForIME() {
     m_imeDeferred = true;
     m_imeDeferDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(5);
     
-    if (m_imeDeferTimer) return;
+    if (m_imeDeferCallback) return;
     
-    m_imeDeferTimer = makeShared<CEventLoopTimer>(
-        std::chrono::milliseconds(5),
-        [this](SP<CEventLoopTimer> timer, void*) {
-            m_imeDeferred = false;
-            m_imeDeferTimer.reset();
-            if (m_output && !m_inFallback) {
-                m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEEDS_FRAME);
-            }
-        },
-        nullptr
-    );
+    m_imeDeferCallback = makeShared<std::function<void()>>([this]() {
+        m_imeDeferred = false;
+        m_imeDeferCallback = nullptr;
+        if (m_output && !m_inFallback) {
+            m_output->scheduleFrame(IOutput::AQ_SCHEDULE_NEEDS_FRAME);
+        }
+    });
     
-    if (auto backend = m_backend.lock()) {
-        // 使用 backend 的事件循环添加定时器
-        // 这里简化处理，实际需要 g_pEventLoopManager->addTimer()
+    // 使用 backend 的 idle 队列延迟执行
+    auto backend = m_backend.lock();
+    if (backend) {
+        backend->addIdleEvent(m_imeDeferCallback);
+    } else {
+        m_imeDeferred = false;
+        m_imeDeferCallback = nullptr;
     }
 }
 

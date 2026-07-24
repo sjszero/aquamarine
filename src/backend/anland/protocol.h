@@ -26,16 +26,17 @@ extern "C" {
 #define MAX_BUFS 8
 #define SERVICE_TYPE_CAMERA 1
 
+// 使用大小为 0 的数组替代柔性数组成员，避免 C++ 警告
 struct ctrl_msg {
     uint32_t type;
     uint32_t size;
-    uint8_t  payload[];
+    uint8_t  payload[0];
 } __attribute__((packed));
 
 struct data_msg {
     uint32_t type;
     uint32_t size;
-    uint8_t  payload[];
+    uint8_t  payload[0];
 } __attribute__((packed));
 
 struct screen_info {
@@ -65,6 +66,7 @@ struct buf_info {
 #define INPUT_TYPE_TEXT_INPUT     9
 #define INPUT_TYPE_ACTION         10
 #define INPUT_TYPE_RESOURCE       11
+#define INPUT_TYPE_RESOURCE_INVALID 12
 
 #define INPUT_ACTION_DOWN    0
 #define INPUT_ACTION_UP      1

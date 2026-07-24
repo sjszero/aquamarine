@@ -4,6 +4,7 @@
 
 #include <aquamarine/backend/Backend.hpp>
 #include <hyprutils/memory/SharedPtr.hpp>
+#include <hyprutils/math/Vector2D.hpp>
 #include <atomic>
 #include <mutex>
 #include <string>
@@ -15,6 +16,9 @@
 #include <deque>
 #include <chrono>
 
+// 前向声明 CEventLoopTimer（Hyprland 类型）
+class CEventLoopTimer;
+
 extern "C" {
 #include "display_producer.h"
 #include "anland_audio.h"
@@ -25,6 +29,7 @@ namespace Aquamarine {
 
 using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::CWeakPointer;
+using Hyprutils::Math::Vector2D;
 
 class CAnlandOutput;
 class CAnlandPointer;
@@ -166,7 +171,7 @@ private:
     // IME 延迟重绘
     std::atomic<bool> m_imeDeferred{false};
     std::chrono::steady_clock::time_point m_imeDeferDeadline;
-    CSharedPointer<CEventLoopTimer> m_imeDeferTimer;
+    CSharedPointer<std::function<void()>> m_imeDeferCallback;
 
     // Touch 状态跟踪 (用于手势识别)
     struct TouchPoint {

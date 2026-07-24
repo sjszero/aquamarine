@@ -8,6 +8,7 @@
 #include <hyprutils/memory/SharedPtr.hpp>
 #include <hyprutils/os/FileDescriptor.hpp>
 #include <hyprutils/math/Region.hpp>
+#include <hyprutils/math/Vector2D.hpp>
 #include <array>
 #include <atomic>
 #include <mutex>
@@ -27,6 +28,7 @@ namespace Aquamarine {
 using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::Math::CRegion;
+using Hyprutils::Math::Vector2D;
 
 class CAnlandBackend;
 class CAnlandDmaBuffer;
