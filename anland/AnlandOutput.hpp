@@ -1,0 +1,159 @@
+// src/backend/anland/AnlandOutput.hpp
+#ifndef AQUAMARINE_ANLAND_OUTPUT_HPP
+#define AQUAMARINE_ANLAND_OUTPUT_HPP
+
+#include <aquamarine/output/Output.hpp>
+#include <aquamarine/buffer/Buffer.hpp>
+#include <aquamarine/allocator/Swapchain.hpp>
+#include <hyprutils/memory/SharedPtr.hpp>
+#include <hyprutils/os/FileDescriptor.hpp>
+#include <hyprutils/math/Region.hpp>
+#include <hyprutils/math/Vector2D.hpp>
+#include <array>
+#include <atomic>
+#include <mutex>
+#include <vector>
+#include <memory>
+#include <EGL/egl.h>
+#include <EGL/eglext.h>
+#include <GLES3/gl32.h>
+#include <GLES2/gl2ext.h>
+
+extern "C" {
+#include "display_producer.h"
+}
+
+namespace Aquamarine {
+
+using Hyprutils::Memory::CSharedPointer;
+using Hyprutils::Memory::makeShared;
+using Hyprutils::Math::CRegion;
+using Hyprutils::Math::Vector2D;
+
+class CAnlandBackend;
+class CAnlandDmaBuffer;
+
+class CAnlandOutput : public IOutput {
+public:
+    explicit CAnlandOutput(CAnlandBackend* backend);
+    virtual ~CAnlandOutput();
+
+    // IOutput
+    virtual bool commit() override;
+    virtual bool test() override;
+    virtual CSharedPointer<IBackendImplementation> getBackend() override;
+    virtual std::vector<SDRMFormat> getRenderFormats() override;
+    virtual bool pendingPageFlip() override { return m_framePending.load(); }
+    virtual void scheduleFrame(const scheduleFrameReason reason = AQ_SCHEDULE_UNKNOWN) override;
+    virtual size_t getGammaSize() override { return 256; }
+    virtual size_t getDeGammaSize() override { return 0; }
+    virtual bool destroy() override { return false; }
+
+    // Cursor (software, no hw cursor support)
+    virtual bool setCursor(CSharedPointer<IBuffer> buffer, const Hyprutils::Math::Vector2D& hotspot) override { return false; }
+    virtual void moveCursor(const Hyprutils::Math::Vector2D& coord, bool skipSchedule = false) override {}
+    virtual void setCursorVisible(bool visible) override {}
+    virtual Hyprutils::Math::Vector2D cursorPlaneSize() override { return {-1, -1}; }
+
+    // Anland 特有
+    bool initialize(uint32_t width, uint32_t height, uint32_t refresh);
+    void releaseBuffers();
+    void updateRefreshRate(uint32_t refresh);
+    void enterFallback();
+    void exitFallback();
+    bool isInFallback() const { return m_inFallback; }
+    void onBufferReady();
+
+    // 直接缓冲区访问（绕过 swapchain）
+    int getBufferCount() const { return m_bufferCount; }
+    CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
+    CSharedPointer<CBackend> getCBackend() const;
+
+    // EGL 上下文管理
+    void setEGL(EGLDisplay dpy, EGLContext ctx) { 
+        std::lock_guard<std::mutex> lock(m_eglMutex);
+        m_eglDisplay = dpy; 
+        m_eglContext = ctx; 
+    }
+
+    // 获取当前使用的 EGL 上下文（线程安全）
+    bool getEGL(EGLDisplay& dpy, EGLContext& ctx) {
+        std::lock_guard<std::mutex> lock(m_eglMutex);
+        if (m_eglDisplay == EGL_NO_DISPLAY || m_eglContext == EGL_NO_CONTEXT) return false;
+        dpy = m_eglDisplay;
+        ctx = m_eglContext;
+        return true;
+    }
+
+    void* getImageDescription() const { return m_imageDescription; }
+
+    display_ctx* display();
+    uint32_t getWidth() const { return m_width; }
+    uint32_t getHeight() const { return m_height; }
+    uint32_t getDrmFormat() const { return m_drmFormat; }
+
+private:
+    // importBuffer 已被 cacheOrImportBuffer 替代（使用了 DMA-BUF 缓存机制）
+    // bool importBuffer(int index);
+    bool cacheOrImportBuffer(int index);
+    void destroyBuffer(int index);
+    void importBuffers();
+    void updateMode(uint32_t width, uint32_t height, uint32_t format);
+    void ensureEGLContext();
+    bool createRenderFence(int& fenceFd);
+
+    // 损伤跟踪 - 线程安全
+    struct BufferSlot {
+        int fd = -1;
+        uint32_t width = 0, height = 0;
+        uint32_t format = 0;
+        uint64_t modifier = 0;
+        uint32_t offset = 0;
+        uint32_t stride = 0;
+
+        CSharedPointer<CAnlandDmaBuffer> buffer;
+        bool imported = false;
+        bool inUse = false;
+        bool hasDamage = true;
+        CRegion accumDamage;
+        
+        // 用于同步
+        std::mutex mutex;
+    };
+
+    std::array<BufferSlot, MAX_BUFS> m_slots;
+    int m_bufferCount = 0;
+    int m_selectedIndex = 0;
+
+    bool m_inFallback = true;
+    bool m_outputReady = false;
+    bool m_buffersImported = false;
+    bool m_shouldTriggerRefresh = false;
+    std::atomic<bool> m_framePending{false};
+    std::atomic<bool> m_commitInProgress{false};
+
+    bool m_frameScheduled = false;
+    CSharedPointer<std::function<void(void)>> m_frameIdle;
+
+    uint32_t m_width = 0;
+    uint32_t m_height = 0;
+    uint32_t m_refresh = 60000;
+    uint32_t m_drmFormat = DRM_FORMAT_XRGB8888;
+
+    // EGL 上下文 - 线程安全
+    std::mutex m_eglMutex;
+    EGLDisplay m_eglDisplay = EGL_NO_DISPLAY;
+    EGLContext m_eglContext = EGL_NO_CONTEXT;
+
+    void* m_imageDescription = nullptr;
+
+    mutable std::mutex m_bufferMutex;
+    std::atomic<bool> m_destroying{false};
+    std::atomic<bool> m_shutdownDone{false};
+
+    CAnlandBackend* m_backend = nullptr;
+};
+
+} // namespace Aquamarine
+
+#endif
