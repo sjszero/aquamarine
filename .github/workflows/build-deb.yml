@@ -173,9 +173,9 @@ jobs:
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "⚠️ Some backports packages not available"
 
-          # libhyprwire-dev and libglaze-dev from sid (need libstdc++6 >=15)
+          # libhyprwire-dev, libglaze-dev, hyprwire-scanner from sid (need libstdc++6 >=15)
           apt-get install -y -t sid --no-install-recommends \
-            libhyprwire-dev libglaze-dev \
+            libhyprwire-dev libglaze-dev hyprwire-scanner \
             || echo "⚠️ Some sid packages not available"
 
       - name: Verify libdisplay-info
@@ -585,11 +585,11 @@ jobs:
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "⚠️ Some packages from backports not available, may need sid"
           
-          # libhyprwire-dev and libglaze-dev from sid (need libstdc++6 >=15)
+          # libhyprwire-dev, libglaze-dev, hyprwire-scanner from sid (need libstdc++6 >=15)
           apt-get install -y -t sid --no-install-recommends \
-            libhyprwire-dev libglaze-dev \
+            libhyprwire-dev libglaze-dev hyprwire-scanner \
             || echo "⚠️ Some sid packages not available"
-          
+
           # 尝试从 sid 安装其他不可用的包
           apt-get install -y -t sid --no-install-recommends \
             hyprland-protocols \
