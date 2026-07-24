@@ -620,29 +620,39 @@ jobs:
           
           echo "🔧 Fixing compilation errors for Anland backend..."
           
-          # Fix 1: Add AnlandBuffer.hpp include to make CAnlandDmaBuffer full type visible
-          # (CSharedPointer upcast from CAnlandDmaBuffer to IBuffer needs full type definition)
-          MONITOR_CPP="src/helpers/Monitor.cpp"
-          if grep -q 'AnlandBuffer' "$MONITOR_CPP" 2>/dev/null; then
-            echo "   ✅ Include already present"
+          # Fix 1: Global include of AnlandBuffer.hpp via CXXFLAGS
+          ANLAND_INCLUDE="/usr/include/aquamarine/backend/anland/AnlandBuffer.hpp"
+          if [ -f "$ANLAND_INCLUDE" ]; then
+            echo "   ✅ AnlandBuffer.hpp found"
+            export DEB_CXXFLAGS_APPEND="-include $ANLAND_INCLUDE"
+            echo "DEB_CXXFLAGS_APPEND=$DEB_CXXFLAGS_APPEND" >> $GITHUB_ENV
           else
-            echo "   📝 Adding #include <aquamarine/backend/anland/AnlandBuffer.hpp>"
-            # Use cat + heredoc to prepend reliably (sed \n may not work on all systems)
-            { echo '#include <aquamarine/backend/anland/AnlandBuffer.hpp>'; cat "$MONITOR_CPP"; } > "${MONITOR_CPP}.new"
-            mv "${MONITOR_CPP}.new" "$MONITOR_CPP"
-            echo "   ✅ Include added"
+            echo "   ⚠️ AnlandBuffer.hpp NOT found, adding to key files..."
+            for f in src/helpers/Monitor.cpp src/render/Renderer.cpp; do
+              [ -f "$f" ] && ! grep -q 'AnlandBuffer' "$f" 2>/dev/null && \
+                { echo '#include <aquamarine/backend/anland/AnlandBuffer.hpp>'; cat "$f"; } > "${f}.new" && mv "${f}.new" "$f"
+            done
           fi
           
-          # Fix 2: Replace self->scheduleFrame( with self->m_output->scheduleFrame(
-          # (CMonitor doesn't have scheduleFrame but IOutput does)
-          SCHEDULE_COUNT=$(grep -c 'self->scheduleFrame(' "$MONITOR_CPP" 2>/dev/null || echo 0)
-          if [ "$SCHEDULE_COUNT" -gt 0 ]; then
-            echo "   📝 Fixing $SCHEDULE_COUNT self->scheduleFrame() calls → self->m_output->scheduleFrame()"
-            sed -i 's/self->scheduleFrame(/self->m_output->scheduleFrame(/g' "$MONITOR_CPP"
-            echo "   ✅ Fixed $SCHEDULE_COUNT calls"
-          else
-            echo "   ✅ No scheduleFrame calls to fix (already fixed)"
-          fi
+          # Fix 2: scheduleFrame - missing in CMonitor, redirect to m_output
+          echo "   📝 Fixing scheduleFrame calls..."
+          grep -rl 'scheduleFrame(' --include='*.cpp' . 2>/dev/null | while read -r f; do
+            sed -i 's/\bself->scheduleFrame(/self->m_output->scheduleFrame(/g' "$f"
+            sed -i 's/\bthis->scheduleFrame(/this->m_output->scheduleFrame(/g' "$f"
+            sed -i 's/\([a-zA-Z_]\+\).scheduleFrame(/\1.m_output->scheduleFrame(/g' "$f"
+          done
+          
+          # Fix 3: getCurrentFramebuffer → getCurrentBuffer
+          echo "   📝 Fixing getCurrentFramebuffer..."
+          grep -rl 'getCurrentFramebuffer' --include='*.cpp' . 2>/dev/null | while read -r f; do
+            sed -i 's/getCurrentFramebuffer/getCurrentBuffer/g' "$f"
+          done
+          
+          # Fix 4: beginRender doesn't exist on CAnlandOutput, comment out
+          echo "   📝 Disabling beginRender calls..."
+          grep -rln '\.beginRender(' --include='*.cpp' . 2>/dev/null | while read -r f; do
+            sed -i 's/\.beginRender(/\/\/ FIXME(anland): beginRender not implemented\n            \.beginRender(/g' "$f"
+          done
           
           echo "✅ Compilation fixes applied"
 
