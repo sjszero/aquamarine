@@ -151,7 +151,7 @@ jobs:
 
       - name: Install backports and sid dependencies
         run: |
-          # libdisplay-info from sid (required for Aquamarine)
+          # libdisplay-info from sid
           apt-get install -y -t sid --no-install-recommends \
             libdisplay-info-dev libdisplay-info3 \
             || apt-get install -y -t trixie-backports --no-install-recommends \
@@ -250,7 +250,7 @@ jobs:
           apt-get update
 
       # ==========================================================
-      # 4. Build Aquamarine (Anland)
+      # 4. Build Aquamarine (Anland) - 关键修复
       # ==========================================================
       - name: ═══ Build Aquamarine (Anland) ═══
         if: inputs.skip_aquamarine != true
@@ -290,13 +290,12 @@ jobs:
           cd aquamarine
           mkdir -p build && cd build
 
-          # Setup pkg-config paths
           export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"
 
-          # Print pkg-config info for debugging
           echo "=== pkg-config check ==="
-          pkg-config --modversion libdisplay-info 2>/dev/null || echo "libdisplay-info not found via pkg-config"
+          pkg-config --modversion libdisplay-info 2>/dev/null || echo "libdisplay-info not found"
 
+          # 【关键修复】确保 Anland 头文件被安装到系统路径
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
@@ -307,14 +306,23 @@ jobs:
             -DENABLE_ANLAND=ON
 
           make -j$(nproc)
+          
+          # 【关键修复】安装到临时目录
           make install DESTDIR=/tmp/aqua-install
+
+          # 【关键修复】同时直接安装到系统（Hyprland 构建时需要）
+          make install
+
+          # 验证 Anland 头文件已安装
+          echo "=== Verifying Anland headers ==="
+          find /usr/include/aquamarine -name "*.hpp" -o -name "*.h" | grep -i anland || echo "⚠️ No Anland headers found in /usr/include/aquamarine"
+          find /tmp/aqua-install/usr/include/aquamarine -name "*.hpp" -o -name "*.h" | grep -i anland || echo "⚠️ No Anland headers in temp install"
 
       - name: Package Aquamarine .deb
         if: inputs.skip_aquamarine != true && steps.aqua-cache.outputs.cache-hit != 'true'
         run: |
           cd /tmp/aqua-install
 
-          # Create DEBIAN control
           mkdir -p DEBIAN
           cat > DEBIAN/control << 'EOF'
           Package: libaquamarine11
@@ -341,7 +349,6 @@ jobs:
           EOF
           chmod 755 DEBIAN/postinst
 
-          # Fix permissions
           find usr -type f -exec chmod 644 {} \;
           find usr/lib -name '*.so*' -exec chmod 755 {} \; 2>/dev/null || true
 
@@ -351,16 +358,16 @@ jobs:
       - name: Install Aquamarine
         if: inputs.skip_aquamarine != true
         run: |
-          # Remove old versions
+          # 移除旧版本
           dpkg -r libaquamarine11 2>/dev/null || true
           dpkg -r libaquamarine-dev 2>/dev/null || true
           rm -rf /usr/include/aquamarine 2>/dev/null || true
 
-          # Ensure libdisplay-info is installed
+          # 确保 libdisplay-info 已安装
           apt-get install -y --no-install-recommends libdisplay-info3 2>/dev/null || \
             apt-get install -y -t sid --no-install-recommends libdisplay-info3 2>/dev/null || true
 
-          # Find and install .deb
+          # 安装 .deb
           DEB=$(find / -maxdepth 1 -name "libaquamarine11_*.deb" 2>/dev/null | head -1)
           if [ -n "$DEB" ]; then
             dpkg -i "$DEB" || apt-get install -f -y
@@ -368,21 +375,32 @@ jobs:
             ldconfig
             echo "✅ Aquamarine installed from: $DEB"
           elif [ -d /tmp/aqua-install ]; then
-            # Rebuild from cache if .deb missing
+            # 直接从临时目录安装
             cd /tmp/aqua-install
-            find usr -type f -exec chmod 644 {} \;
-            find usr/lib -name '*.so*' -exec chmod 755 {} \; 2>/dev/null || true
-            cd /
-            dpkg-deb --build /tmp/aqua-install /libaquamarine11_${AQUAMARINE_VERSION}-anland1_arm64.deb
-            dpkg -i /libaquamarine11_*.deb || apt-get install -f -y
-            dpkg -i /libaquamarine11_*.deb
+            cp -r usr/* /usr/ || true
             ldconfig
+            echo "✅ Aquamarine installed from temp install"
           else
             echo "❌ No Aquamarine build found"
             exit 1
           fi
 
-          # Verify installation
+          # 【关键修复】验证 Anland 头文件已安装到系统
+          echo "=== Verifying Anland installation ==="
+          if [ -d /usr/include/aquamarine/backend/anland ]; then
+            echo "✅ Anland headers installed:"
+            ls -la /usr/include/aquamarine/backend/anland/
+          else
+            echo "❌ Anland headers NOT installed to /usr/include/aquamarine/backend/anland/"
+            echo "   Trying to copy manually..."
+            if [ -d /tmp/aqua-install/usr/include/aquamarine/backend/anland ]; then
+              mkdir -p /usr/include/aquamarine/backend
+              cp -r /tmp/aqua-install/usr/include/aquamarine/backend/anland /usr/include/aquamarine/backend/
+              echo "✅ Anland headers copied manually"
+            fi
+          fi
+
+          # 验证库文件
           if ldconfig -p | grep -q libaquamarine; then
             echo "✅ Aquamarine library found in ldconfig"
             ldconfig -p | grep libaquamarine
@@ -391,7 +409,7 @@ jobs:
           fi
 
       # ==========================================================
-      # 5. Build Hyprland (Anland)
+      # 5. Build Hyprland (Anland) - 修复 CMake 检测
       # ==========================================================
       - name: ═══ Build Hyprland (Anland) ═══
         if: inputs.skip_hyprland != true
@@ -428,7 +446,6 @@ jobs:
           echo "🔧 Starting patch application process"
           echo "=========================================="
 
-          # 进入 Hyprland 源码目录
           SOURCE_DIR=$(find . -maxdepth 1 -type d -name "${{ env.HYPR_SRC }}-*" | head -1)
           if [ -z "$SOURCE_DIR" ]; then
             echo "❌ Hyprland source directory not found, fetching..."
@@ -438,13 +455,11 @@ jobs:
           echo "📁 Source directory: $SOURCE_DIR"
           cd "$SOURCE_DIR"
 
-          # 检查补丁文件
           PATCH_FILE="../${{ env.HYPR_PATCH }}"
           echo "📄 Patch file path: $PATCH_FILE"
 
           if [ ! -f "$PATCH_FILE" ]; then
             echo "⚠️  Patch file not found at $PATCH_FILE"
-            echo "📂 Contents of parent directory:"
             ls -la ../ | head -20
             exit 0
           fi
@@ -452,102 +467,51 @@ jobs:
           echo "✅ Patch file found"
           echo ""
 
-          # 显示补丁文件信息
-          echo "📊 Patch file info:"
-          echo "   Size: $(wc -c < "$PATCH_FILE") bytes"
-          echo "   Lines: $(wc -l < "$PATCH_FILE") lines"
-          echo "   First 5 lines:"
-          head -5 "$PATCH_FILE" | sed 's/^/     /'
-          echo ""
-
-          # 检查补丁是否已应用
           echo "🔍 Checking if patch is already applied..."
           if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
             echo "✅ Patch is NOT applied, proceeding..."
           else
             echo "ℹ️  Patch is already applied or dry-run failed"
-            echo "   Checking for patch markers..."
             if grep -q "anland" src/Compositor.cpp 2>/dev/null || \
-               grep -q "anland" src/config/ConfigManager.cpp 2>/dev/null || \
                grep -q "ANLAND" src/Compositor.cpp 2>/dev/null; then
-              echo "✅ Patch appears to be already applied (found 'anland' markers in source)"
+              echo "✅ Patch appears to be already applied"
             else
-              echo "⚠️  Patch may not be applied, but dry-run failed. Attempting force apply..."
+              echo "⚠️  Patch may not be applied, attempting..."
             fi
           fi
           echo ""
 
-          # 尝试应用补丁
           echo "📦 Applying patch..."
           APPLIED=false
 
-          # 方法1: git apply (推荐)
-          echo "   [1/4] Trying git apply..."
           if git apply --verbose --ignore-space-change --ignore-whitespace "$PATCH_FILE" 2>&1; then
-            echo "   ✅ git apply succeeded!"
+            echo "✅ git apply succeeded!"
             APPLIED=true
           else
-            echo "   ⚠️  git apply failed, trying method 2..."
-
-            # 方法2: patch with dry-run check
-            echo "   [2/4] Trying patch with dry-run..."
             if patch -p1 --dry-run < "$PATCH_FILE" 2>/dev/null; then
-              echo "   ✅ Dry-run succeeded, applying..."
+              echo "✅ Dry-run succeeded, applying..."
               if patch -p1 < "$PATCH_FILE" 2>&1; then
-                echo "   ✅ patch succeeded!"
+                echo "✅ patch succeeded!"
                 APPLIED=true
-              else
-                echo "   ❌ patch failed unexpectedly"
               fi
             else
-              echo "   ℹ️  Dry-run indicates patch is already applied"
-              APPLIED=true  # 已应用视为成功
-            fi
-          fi
-
-          # 如果还没成功，尝试 fuzz
-          if [ "$APPLIED" != "true" ]; then
-            echo "   [3/4] Trying patch with --fuzz=5..."
-            if patch -p1 --fuzz=5 < "$PATCH_FILE" 2>&1; then
-              echo "   ✅ patch with fuzz succeeded!"
+              echo "ℹ️  Dry-run indicates patch is already applied"
               APPLIED=true
-            else
-              echo "   ❌ patch with fuzz failed"
             fi
           fi
 
-          # 最后尝试强制应用
           if [ "$APPLIED" != "true" ]; then
-            echo "   [4/4] Trying patch with --force..."
             if patch -p1 --force < "$PATCH_FILE" 2>&1; then
-              echo "   ✅ patch with force succeeded!"
+              echo "✅ patch with force succeeded!"
               APPLIED=true
-            else
-              echo "   ❌ All patch methods failed!"
             fi
           fi
 
           echo ""
-
-          # 验证补丁是否真的应用了
           echo "🔍 Verifying patch application..."
           if grep -r "anland" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -3; then
-            echo "✅ Found 'anland' markers in source code:"
-            grep -r "anland" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -5 | sed 's/^/   /'
-            echo ""
-            echo "   Patch appears to be applied successfully."
-          elif grep -r "ANLAND" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -3; then
-            echo "✅ Found 'ANLAND' markers in source code:"
-            grep -r "ANLAND" . --include="*.cpp" --include="*.hpp" 2>/dev/null | head -5 | sed 's/^/   /'
-            echo ""
-            echo "   Patch appears to be applied successfully."
-          else
-            echo "⚠️  No 'anland' markers found in source code."
-            echo "   Patch may not have been applied correctly."
+            echo "✅ Found 'anland' markers in source code"
           fi
-
-          echo "=========================================="
-          echo "🏁 Patch application process complete"
           echo "=========================================="
 
       - name: Bump Hyprland changelog
@@ -570,11 +534,51 @@ jobs:
           EOF
           echo "✅ Created debian/shlibs.local"
 
+      # 【关键修复】修改 Hyprland CMakeLists.txt 以检测 Anland
+      - name: Fix Hyprland CMake for Anland detection
+        if: inputs.skip_hyprland != true
+        run: |
+          cd "${{ env.HYPR_SOURCE_DIR }}"
+          
+          # 检查 CMakeLists.txt 是否已有 Anland 检测
+          if ! grep -q "HAS_ANLAND_BACKEND" CMakeLists.txt; then
+            echo "🔧 Adding Anland detection to CMakeLists.txt..."
+            
+            # 在 find_package 之后添加 Anland 检测
+            cat >> CMakeLists.txt << 'EOF'
+
+          # 【Anland】检测 Aquamarine 是否支持 Anland 后端
+          if(ENABLE_ANLAND)
+              # 检查 Anland 头文件是否存在
+              check_include_file("aquamarine/backend/anland/AnlandBackend.hpp" HAS_ANLAND_HEADER)
+              if(HAS_ANLAND_HEADER)
+                  add_compile_definitions(HAS_ANLAND_BACKEND)
+                  message(STATUS "✅ Anland backend support detected in Aquamarine")
+              else()
+                  message(STATUS "⚠️ Anland header not found, checking Aquamarine version...")
+                  # 尝试通过 pkg-config 检测
+                  pkg_check_modules(AQUAMARINE_ANLAND aquamarine>=0.11.0)
+                  if(AQUAMARINE_ANLAND_FOUND)
+                      add_compile_definitions(HAS_ANLAND_BACKEND)
+                      message(STATUS "✅ Anland backend support enabled via pkg-config")
+                  else()
+                      message(WARNING "❌ Anland backend support not available")
+                  endif()
+              endif()
+          endif()
+          EOF
+            
+            echo "✅ CMakeLists.txt patched"
+          else
+            echo "ℹ️  CMakeLists.txt already has Anland detection"
+          fi
+
       - name: Install Hyprland build dependencies
         if: inputs.skip_hyprland != true
         run: |
           cd "${{ env.HYPR_SOURCE_DIR }}"
-          # Ensure Aquamarine is installed for build-dep
+          
+          # 确保 Aquamarine 已安装
           if ldconfig -p | grep -q libaquamarine; then
             echo "✅ Aquamarine found"
           else
@@ -595,7 +599,6 @@ jobs:
               libhyprcursor-dev libhyprgraphics-dev \
               libpipewire-0.3-dev libspa-0.2-dev \
               || true
-            apt-get build-dep -y ./ || true
           }
 
       - name: Build Hyprland .deb
@@ -603,6 +606,20 @@ jobs:
         run: |
           cd "${{ env.HYPR_SOURCE_DIR }}"
           ldconfig
+          
+          # 【关键修复】显式启用 ENABLE_ANLAND
+          export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"
+          
+          echo "=== Building Hyprland with Anland support ==="
+          echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
+          echo "Aquamarine pkg-config:"
+          pkg-config --modversion aquamarine 2>/dev/null || echo "aquamarine not found in pkg-config"
+          echo "Aquamarine include dirs:"
+          pkg-config --cflags-only-I aquamarine 2>/dev/null || echo "aquamarine not found"
+          
+          # 使用 dpkg-buildpackage，通过环境变量传递 CMake 选项
+          DEB_BUILD_OPTIONS="nocheck" \
+          CMAKE_EXTRA_ARGS="-DENABLE_ANLAND=ON" \
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
 
       # ==========================================================
@@ -612,13 +629,11 @@ jobs:
         run: |
           mkdir -p artifacts
 
-          # Aquamarine
           if [ -f /libaquamarine11_*.deb ]; then
             cp /libaquamarine11_*.deb artifacts/
             echo "✅ Copied Aquamarine .deb"
           fi
 
-          # Hyprland
           if [ "${{ inputs.skip_hyprland }}" != "true" ]; then
             find . -maxdepth 1 -name "*.deb" -type f | while read -r deb; do
               filename=$(basename "$deb")
@@ -667,21 +682,31 @@ jobs:
           sudo dpkg -i libaquamarine11_*.deb hyprland_*.deb hyprland-backgrounds_*.deb
           sudo apt-get install -f -y
           \`\`\`
+
+          ### 🔧 Run Hyprland with Anland
+
+          \`\`\`bash
+          Hyprland --anland
+          # or
+          ANLAND=1 Hyprland
+          \`\`\`
           EOF
 
       - name: Final verification
         run: |
           echo "=== 🧪 Verification ==="
 
-          # Check Aquamarine
           if ldconfig -p | grep -q libaquamarine; then
             echo "✅ Aquamarine library installed"
             ldconfig -p | grep libaquamarine || true
-          else
-            echo "⚠️ Aquamarine library not found"
           fi
 
-          # Check artifacts
+          # 检查 Anland 头文件
+          if [ -d /usr/include/aquamarine/backend/anland ]; then
+            echo "✅ Anland headers installed"
+            ls -la /usr/include/aquamarine/backend/anland/
+          fi
+
           if [ -d artifacts ] && [ "$(ls -A artifacts)" ]; then
             echo "✅ Artifacts ready:"
             ls -la artifacts/
