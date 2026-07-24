@@ -113,6 +113,9 @@ jobs:
 
           # libdisplay-info from sid
           libdisplay-info-dev libdisplay-info3
+
+          # 【关键】不要安装官方 Aquamarine
+          # libaquamarine-dev 会被 apt-get build-dep 拉取，我们需要阻止它
           EOF
           echo "package_hash=$(sha256sum /tmp/apt-packages.txt | cut -c1-16)" >> $GITHUB_OUTPUT
 
@@ -151,14 +154,12 @@ jobs:
 
       - name: Install backports and sid dependencies
         run: |
-          # libdisplay-info from sid
           apt-get install -y -t sid --no-install-recommends \
             libdisplay-info-dev libdisplay-info3 \
             || apt-get install -y -t trixie-backports --no-install-recommends \
             libdisplay-info-dev libdisplay-info3 \
             || echo "⚠️ libdisplay-info not available"
 
-          # Backports packages
           apt-get install -y -t trixie-backports --no-install-recommends \
             libxkbcommon-dev wayland-protocols \
             libinput-dev \
@@ -250,7 +251,7 @@ jobs:
           apt-get update
 
       # ==========================================================
-      # 4. Build Aquamarine (Anland) - 关键修复
+      # 4. Build Aquamarine (Anland)
       # ==========================================================
       - name: ═══ Build Aquamarine (Anland) ═══
         if: inputs.skip_aquamarine != true
@@ -295,7 +296,6 @@ jobs:
           echo "=== pkg-config check ==="
           pkg-config --modversion libdisplay-info 2>/dev/null || echo "libdisplay-info not found"
 
-          # 【关键修复】确保 Anland 头文件被安装到系统路径
           cmake .. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr \
@@ -307,16 +307,21 @@ jobs:
 
           make -j$(nproc)
           
-          # 【关键修复】安装到临时目录
-          make install DESTDIR=/tmp/aqua-install
-
-          # 【关键修复】同时直接安装到系统（Hyprland 构建时需要）
+          # 安装到系统（Hyprland 构建时需要）
           make install
+
+          # 同时安装到临时目录用于打包 .deb
+          make install DESTDIR=/tmp/aqua-install
 
           # 验证 Anland 头文件已安装
           echo "=== Verifying Anland headers ==="
-          find /usr/include/aquamarine -name "*.hpp" -o -name "*.h" | grep -i anland || echo "⚠️ No Anland headers found in /usr/include/aquamarine"
-          find /tmp/aqua-install/usr/include/aquamarine -name "*.hpp" -o -name "*.h" | grep -i anland || echo "⚠️ No Anland headers in temp install"
+          if [ -d /usr/include/aquamarine/backend/anland ]; then
+            echo "✅ Anland headers installed to /usr/include/aquamarine/backend/anland/"
+            ls -la /usr/include/aquamarine/backend/anland/
+          else
+            echo "❌ Anland headers NOT installed!"
+            exit 1
+          fi
 
       - name: Package Aquamarine .deb
         if: inputs.skip_aquamarine != true && steps.aqua-cache.outputs.cache-hit != 'true'
@@ -355,61 +360,47 @@ jobs:
           cd /
           dpkg-deb --build /tmp/aqua-install /libaquamarine11_${AQUAMARINE_VERSION}-anland1_arm64.deb
 
-      - name: Install Aquamarine
+      - name: Verify Aquamarine installation
         if: inputs.skip_aquamarine != true
         run: |
-          # 移除旧版本
-          dpkg -r libaquamarine11 2>/dev/null || true
-          dpkg -r libaquamarine-dev 2>/dev/null || true
-          rm -rf /usr/include/aquamarine 2>/dev/null || true
-
-          # 确保 libdisplay-info 已安装
-          apt-get install -y --no-install-recommends libdisplay-info3 2>/dev/null || \
-            apt-get install -y -t sid --no-install-recommends libdisplay-info3 2>/dev/null || true
-
-          # 安装 .deb
-          DEB=$(find / -maxdepth 1 -name "libaquamarine11_*.deb" 2>/dev/null | head -1)
-          if [ -n "$DEB" ]; then
-            dpkg -i "$DEB" || apt-get install -f -y
-            dpkg -i "$DEB"
-            ldconfig
-            echo "✅ Aquamarine installed from: $DEB"
-          elif [ -d /tmp/aqua-install ]; then
-            # 直接从临时目录安装
-            cd /tmp/aqua-install
-            cp -r usr/* /usr/ || true
-            ldconfig
-            echo "✅ Aquamarine installed from temp install"
-          else
-            echo "❌ No Aquamarine build found"
-            exit 1
-          fi
-
-          # 【关键修复】验证 Anland 头文件已安装到系统
-          echo "=== Verifying Anland installation ==="
-          if [ -d /usr/include/aquamarine/backend/anland ]; then
-            echo "✅ Anland headers installed:"
-            ls -la /usr/include/aquamarine/backend/anland/
-          else
-            echo "❌ Anland headers NOT installed to /usr/include/aquamarine/backend/anland/"
-            echo "   Trying to copy manually..."
-            if [ -d /tmp/aqua-install/usr/include/aquamarine/backend/anland ]; then
-              mkdir -p /usr/include/aquamarine/backend
-              cp -r /tmp/aqua-install/usr/include/aquamarine/backend/anland /usr/include/aquamarine/backend/
-              echo "✅ Anland headers copied manually"
-            fi
-          fi
-
-          # 验证库文件
+          # 验证 Aquamarine 库和头文件
+          echo "=== Verifying Aquamarine installation ==="
+          
+          # 检查库文件
           if ldconfig -p | grep -q libaquamarine; then
             echo "✅ Aquamarine library found in ldconfig"
             ldconfig -p | grep libaquamarine
           else
             echo "⚠️ Aquamarine library not found in ldconfig"
+            # 尝试手动添加
+            if [ -f /usr/lib/aarch64-linux-gnu/libaquamarine.so ]; then
+              echo "✅ libaquamarine.so found at /usr/lib/aarch64-linux-gnu/"
+              ldconfig
+            fi
+          fi
+
+          # 检查 Anland 头文件
+          if [ -d /usr/include/aquamarine/backend/anland ]; then
+            echo "✅ Anland headers installed:"
+            ls -la /usr/include/aquamarine/backend/anland/
+          else
+            echo "❌ Anland headers NOT installed!"
+            echo "   Contents of /usr/include/aquamarine/backend/:"
+            ls -la /usr/include/aquamarine/backend/ 2>/dev/null || echo "   Directory does not exist"
+            exit 1
+          fi
+
+          # 检查 Anland 头文件内容
+          if [ -f /usr/include/aquamarine/backend/anland/AnlandBackend.hpp ]; then
+            echo "✅ AnlandBackend.hpp found"
+            grep -l "AQ_BACKEND_ANLAND" /usr/include/aquamarine/backend/anland/*.hpp 2>/dev/null || \
+              echo "⚠️ AQ_BACKEND_ANLAND not found in headers"
+          else
+            echo "❌ AnlandBackend.hpp not found!"
           fi
 
       # ==========================================================
-      # 5. Build Hyprland (Anland) - 修复 CMake 检测
+      # 5. Build Hyprland (Anland) - 【关键修复】
       # ==========================================================
       - name: ═══ Build Hyprland (Anland) ═══
         if: inputs.skip_hyprland != true
@@ -534,62 +525,56 @@ jobs:
           EOF
           echo "✅ Created debian/shlibs.local"
 
-      # 【关键修复】修改 Hyprland CMakeLists.txt 以检测 Anland
-      - name: Fix Hyprland CMake for Anland detection
+      # ==========================================================
+      # 【关键修复】阻止 apt-get build-dep 安装官方 Aquamarine
+      # ==========================================================
+      - name: Prevent official Aquamarine installation
         if: inputs.skip_hyprland != true
         run: |
           cd "${{ env.HYPR_SOURCE_DIR }}"
           
-          # 检查 CMakeLists.txt 是否已有 Anland 检测
-          if ! grep -q "HAS_ANLAND_BACKEND" CMakeLists.txt; then
-            echo "🔧 Adding Anland detection to CMakeLists.txt..."
-            
-            # 在 find_package 之后添加 Anland 检测
-            cat >> CMakeLists.txt << 'EOF'
-
-          # 【Anland】检测 Aquamarine 是否支持 Anland 后端
-          if(ENABLE_ANLAND)
-              # 检查 Anland 头文件是否存在
-              check_include_file("aquamarine/backend/anland/AnlandBackend.hpp" HAS_ANLAND_HEADER)
-              if(HAS_ANLAND_HEADER)
-                  add_compile_definitions(HAS_ANLAND_BACKEND)
-                  message(STATUS "✅ Anland backend support detected in Aquamarine")
-              else()
-                  message(STATUS "⚠️ Anland header not found, checking Aquamarine version...")
-                  # 尝试通过 pkg-config 检测
-                  pkg_check_modules(AQUAMARINE_ANLAND aquamarine>=0.11.0)
-                  if(AQUAMARINE_ANLAND_FOUND)
-                      add_compile_definitions(HAS_ANLAND_BACKEND)
-                      message(STATUS "✅ Anland backend support enabled via pkg-config")
-                  else()
-                      message(WARNING "❌ Anland backend support not available")
-                  endif()
-              endif()
-          endif()
+          # 方法1: 在 debian/control 中标记 Aquamarine 为已提供
+          if [ -f debian/control ]; then
+            echo "📝 Modifying debian/control to prevent official Aquamarine..."
+            # 添加 Provides 和 Conflicts
+            sed -i '/^Package: hyprland/a\Provides: libaquamarine11 (= 0.11.0-anland1)\nConflicts: libaquamarine-dev\nReplaces: libaquamarine-dev' debian/control 2>/dev/null || true
+          fi
+          
+          # 方法2: 创建空包占位
+          echo "📦 Creating dummy Aquamarine package to satisfy build-dep..."
+          cat > /tmp/dummy-aqua.control << 'EOF'
+          Package: libaquamarine-dev
+          Version: 0.11.0-anland1
+          Architecture: arm64
+          Description: Dummy Aquamarine dev package (provided by anland build)
+          Provides: libaquamarine-dev
           EOF
-            
-            echo "✅ CMakeLists.txt patched"
-          else
-            echo "ℹ️  CMakeLists.txt already has Anland detection"
-          fi
+          
+          # 创建 .deb
+          mkdir -p /tmp/dummy-aqua/DEBIAN
+          cp /tmp/dummy-aqua.control /tmp/dummy-aqua/DEBIAN/control
+          dpkg-deb --build /tmp/dummy-aqua /tmp/libaquamarine-dev-dummy.deb
+          
+          # 安装 dummy 包（不会覆盖真实文件）
+          dpkg -i /tmp/libaquamarine-dev-dummy.deb 2>/dev/null || true
 
-      - name: Install Hyprland build dependencies
+      - name: Install Hyprland build dependencies (without Aquamarine)
         if: inputs.skip_hyprland != true
         run: |
           cd "${{ env.HYPR_SOURCE_DIR }}"
           
-          # 确保 Aquamarine 已安装
-          if ldconfig -p | grep -q libaquamarine; then
-            echo "✅ Aquamarine found"
-          else
-            echo "⚠️ Aquamarine not found, trying to reinstall"
-            DEB=$(find / -maxdepth 1 -name "libaquamarine11_*.deb" 2>/dev/null | head -1)
-            if [ -n "$DEB" ]; then
-              dpkg -i "$DEB" || apt-get install -f -y
-              dpkg -i "$DEB"
-            fi
-          fi
-
+          # 【关键】先备份 debian/control
+          cp debian/control debian/control.bak
+          
+          # 【关键】从 Build-Depends 中移除 libaquamarine-dev
+          sed -i '/Build-Depends:/ s/, libaquamarine-dev[^,]*//g' debian/control
+          sed -i '/Build-Depends:/ s/, libaquamarine-dev[^,]*//g' debian/control
+          
+          echo "📝 Removed libaquamarine-dev from Build-Depends"
+          echo "   New Build-Depends:"
+          grep "^Build-Depends:" debian/control || echo "   Not found"
+          
+          # 安装依赖
           apt-get build-dep -y ./ || {
             echo "⚠️ build-dep failed, installing dependencies manually..."
             apt-get install -y -t trixie-backports --no-install-recommends \
@@ -600,6 +585,9 @@ jobs:
               libpipewire-0.3-dev libspa-0.2-dev \
               || true
           }
+          
+          # 恢复 debian/control
+          mv debian/control.bak debian/control
 
       - name: Build Hyprland .deb
         if: inputs.skip_hyprland != true
@@ -607,17 +595,29 @@ jobs:
           cd "${{ env.HYPR_SOURCE_DIR }}"
           ldconfig
           
-          # 【关键修复】显式启用 ENABLE_ANLAND
           export PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH}"
           
           echo "=== Building Hyprland with Anland support ==="
           echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-          echo "Aquamarine pkg-config:"
+          
+          # 验证 Aquamarine 头文件
+          echo "=== Checking Aquamarine headers ==="
+          if [ -d /usr/include/aquamarine/backend/anland ]; then
+            echo "✅ Anland headers found in /usr/include/aquamarine/backend/anland/"
+            ls -la /usr/include/aquamarine/backend/anland/
+          else
+            echo "❌ Anland headers NOT found!"
+            echo "   Searching for Anland headers..."
+            find /usr -name "AnlandBackend.hpp" 2>/dev/null || echo "   Not found"
+            exit 1
+          fi
+          
+          # 验证 pkg-config
+          echo "=== pkg-config aquamarine ==="
           pkg-config --modversion aquamarine 2>/dev/null || echo "aquamarine not found in pkg-config"
-          echo "Aquamarine include dirs:"
           pkg-config --cflags-only-I aquamarine 2>/dev/null || echo "aquamarine not found"
           
-          # 使用 dpkg-buildpackage，通过环境变量传递 CMake 选项
+          # 使用 dpkg-buildpackage
           DEB_BUILD_OPTIONS="nocheck" \
           CMAKE_EXTRA_ARGS="-DENABLE_ANLAND=ON" \
           dpkg-buildpackage -b -uc -us -d -j$(nproc)
@@ -701,7 +701,6 @@ jobs:
             ldconfig -p | grep libaquamarine || true
           fi
 
-          # 检查 Anland 头文件
           if [ -d /usr/include/aquamarine/backend/anland ]; then
             echo "✅ Anland headers installed"
             ls -la /usr/include/aquamarine/backend/anland/
