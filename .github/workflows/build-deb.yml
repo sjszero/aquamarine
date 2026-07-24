@@ -114,6 +114,9 @@ jobs:
           # OpenSSL (for Hyprland's libcrypto dependency)
           libssl-dev
 
+          # udis86 (Hyprland subproject for profiling)
+          libudis86-dev
+
           # libdisplay-info from sid
           libdisplay-info-dev libdisplay-info3
           EOF
@@ -151,7 +154,8 @@ jobs:
             liblua5.4-dev \
             hwdata \
             glslang-dev glslang-tools \
-            libssl-dev
+            libssl-dev \
+            libudis86-dev
 
       - name: Install backports and sid dependencies
         run: |
