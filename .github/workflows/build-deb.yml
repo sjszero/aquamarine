@@ -173,11 +173,10 @@ jobs:
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "⚠️ Some backports packages not available"
 
-          # libhyprwire-dev from sid (needs libstdc++6 >=15, must use -t sid
-          # so APT resolves the full dependency chain from sid)
+          # libhyprwire-dev and libglaze-dev from sid (need libstdc++6 >=15)
           apt-get install -y -t sid --no-install-recommends \
-            libhyprwire-dev \
-            || echo "⚠️ libhyprwire-dev not available from sid"
+            libhyprwire-dev libglaze-dev \
+            || echo "⚠️ Some sid packages not available"
 
       - name: Verify libdisplay-info
         run: |
@@ -586,10 +585,10 @@ jobs:
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "⚠️ Some packages from backports not available, may need sid"
           
-          # libhyprwire-dev from sid (needs libstdc++6 >=15, must use -t sid)
+          # libhyprwire-dev and libglaze-dev from sid (need libstdc++6 >=15)
           apt-get install -y -t sid --no-install-recommends \
-            libhyprwire-dev \
-            || echo "⚠️ libhyprwire-dev not available from sid"
+            libhyprwire-dev libglaze-dev \
+            || echo "⚠️ Some sid packages not available"
           
           # 尝试从 sid 安装其他不可用的包
           apt-get install -y -t sid --no-install-recommends \
