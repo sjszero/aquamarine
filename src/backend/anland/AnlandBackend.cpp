@@ -23,9 +23,11 @@ using Hyprutils::Memory::CSharedPointer;
 using Hyprutils::Memory::makeShared;
 using Hyprutils::OS::CFileDescriptor;
 
-static uint32_t getCurrentTimeMs() {
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+namespace {
+    uint32_t getCurrentTimeMsInternal() {
+        auto now = std::chrono::steady_clock::now();
+        return std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+    }
 }
 
 static void anland_fallback_callback(void* data) {
@@ -62,7 +64,6 @@ CAnlandBackend::CAnlandBackend(CSharedPointer<CBackend> backend, const std::stri
     ANLAND_LOG("CAnlandBackend constructed, socket: %s", socketPath.c_str());
     m_dummyDRMFD = openDummyDRM();
     
-    // 初始化触摸点
     for (auto& tp : m_touchPoints) {
         tp.active = false;
         tp.id = -1;
@@ -97,7 +98,6 @@ bool CAnlandBackend::start() {
     m_running = true;
     m_inFallback = true;
 
-    // Initialize audio and camera engines (nodes persist across connections)
     anland_audio_start();
     anland_camera_start();
 
@@ -336,43 +336,33 @@ void CAnlandBackend::handleInputEvent(const InputEvent& ev) {
         case INPUT_TYPE_RESOURCE:
             handleResourceEvent(ev);
             break;
-
         case INPUT_TYPE_CLIPBOARD:
             updateClipboard(ev);
             break;
-
         case INPUT_TYPE_TEXT_INPUT:
             updateTextInput(ev);
             break;
-
         case INPUT_TYPE_POINTER_MOTION:
             processPointerMotion(ev);
             break;
-
         case INPUT_TYPE_POINTER_BUTTON:
             processPointerButton(ev);
             break;
-
         case INPUT_TYPE_POINTER_AXIS:
             processPointerAxis(ev);
             break;
-
         case INPUT_TYPE_KEY:
             processKey(ev);
             break;
-
         case INPUT_TYPE_TOUCH:
             processTouch(ev);
             break;
-
         case INPUT_TYPE_TOUCH_FRAME:
             if (m_touch) m_touch->emitFrame();
             break;
-
         case INPUT_TYPE_DISPLAY_REFRESH:
             processDisplayRefresh(ev);
             break;
-
         default:
             ANLAND_TRACE("unhandled input event type %d", ev.type);
             break;
@@ -385,18 +375,14 @@ void CAnlandBackend::processPointerMotion(const InputEvent& ev) {
         m_backend->events.newPointer.emit(m_pointer);
     }
     
-    uint32_t timeMs = getCurrentTimeMs();
+    uint32_t timeMs = getCurrentTimeMsInternal();
     
-    // Android 发送绝对坐标 (x, y) 和相对增量 (dx, dy)
-    // 对绝对坐标，映射到屏幕空间
     if (ev.pointer_motion.x >= 0 && ev.pointer_motion.y >= 0) {
-        // 绝对坐标: 转换为逻辑坐标 (0-1 范围)
         float nx = ev.pointer_motion.x / (float)m_screenWidth;
         float ny = ev.pointer_motion.y / (float)m_screenHeight;
         m_pointer->emitWarp(timeMs, Vector2D(nx, ny));
     }
     
-    // 相对增量
     if (ev.pointer_motion.dx != 0 || ev.pointer_motion.dy != 0) {
         m_pointer->emitMotion(timeMs, Vector2D(ev.pointer_motion.dx, ev.pointer_motion.dy));
     }
@@ -409,7 +395,7 @@ void CAnlandBackend::processPointerButton(const InputEvent& ev) {
         m_pointer = CSharedPointer<CAnlandPointer>(new CAnlandPointer(this));
         m_backend->events.newPointer.emit(m_pointer);
     }
-    m_pointer->emitButton(getCurrentTimeMs(), ev.pointer_button.button, ev.pointer_button.pressed != 0);
+    m_pointer->emitButton(getCurrentTimeMsInternal(), ev.pointer_button.button, ev.pointer_button.pressed != 0);
     m_pointer->emitFrame();
 }
 
@@ -418,7 +404,7 @@ void CAnlandBackend::processPointerAxis(const InputEvent& ev) {
         m_pointer = CSharedPointer<CAnlandPointer>(new CAnlandPointer(this));
         m_backend->events.newPointer.emit(m_pointer);
     }
-    m_pointer->emitAxis(getCurrentTimeMs(), ev.pointer_axis.axis, ev.pointer_axis.value);
+    m_pointer->emitAxis(getCurrentTimeMsInternal(), ev.pointer_axis.axis, ev.pointer_axis.value);
     m_pointer->emitFrame();
 }
 
@@ -427,9 +413,8 @@ void CAnlandBackend::processKey(const InputEvent& ev) {
         m_keyboard = CSharedPointer<CAnlandKeyboard>(new CAnlandKeyboard(this));
         m_backend->events.newKeyboard.emit(m_keyboard);
     }
-    // Android keycode 是 evdev 码，需要 +8 转为 XKB
     uint32_t xkbCode = ev.key.keycode + 8;
-    m_keyboard->emitKey(getCurrentTimeMs(), xkbCode, ev.key.action == INPUT_ACTION_DOWN);
+    m_keyboard->emitKey(getCurrentTimeMsInternal(), xkbCode, ev.key.action == INPUT_ACTION_DOWN);
 }
 
 void CAnlandBackend::processTouch(const InputEvent& ev) {
@@ -438,15 +423,13 @@ void CAnlandBackend::processTouch(const InputEvent& ev) {
         m_backend->events.newTouch.emit(m_touch);
     }
     
-    uint32_t timeMs = getCurrentTimeMs();
+    uint32_t timeMs = getCurrentTimeMsInternal();
     float nx = ev.touch.x / (float)m_screenWidth;
     float ny = ev.touch.y / (float)m_screenHeight;
     
-    // 限制范围
     nx = std::clamp(nx, 0.0f, 1.0f);
     ny = std::clamp(ny, 0.0f, 1.0f);
     
-    // 更新触摸点状态
     {
         std::lock_guard<std::mutex> lock(m_touchMutex);
         for (auto& tp : m_touchPoints) {
@@ -456,7 +439,6 @@ void CAnlandBackend::processTouch(const InputEvent& ev) {
                 break;
             }
         }
-        // 如果是 DOWN，找到空槽位
         if (ev.touch.action == INPUT_ACTION_DOWN) {
             for (auto& tp : m_touchPoints) {
                 if (!tp.active) {
@@ -497,7 +479,6 @@ void CAnlandBackend::handleResourceEvent(const InputEvent& ev) {
         int fd_count = 0;
         if (poll_input_event_extend_fds(m_display, fds, 8, &fd_count, 5000) == 1 && fd_count > 0) {
             anland_camera_set_resources(fds[0], fd_count > 1 ? &fds[1] : nullptr, fd_count - 1);
-            // 注意：anland_camera_set_resources 会 dup fds，所以这里可以关闭
             for (int i = 0; i < fd_count; i++) close(fds[i]);
             ANLAND_LOG("Camera resources updated: %d streams", fd_count - 1);
         }
@@ -533,7 +514,6 @@ void CAnlandBackend::updateClipboard(const InputEvent& ev) {
 
     std::string text(reinterpret_cast<char*>(data.data()), size);
 
-    // 去重
     if (text == m_lastClipboardText) {
         ANLAND_TRACE("updateClipboard: text unchanged, skipping");
         return;
@@ -566,7 +546,6 @@ void CAnlandBackend::updateTextInput(const InputEvent& ev) {
     std::string text(reinterpret_cast<char*>(data.data()), size);
     ANLAND_LOG("updateTextInput: received text: %s", text.c_str());
 
-    // 延迟重绘：让客户端有机会更新 surface
     deferFrameForIME();
 
     std::lock_guard<std::mutex> lock(m_callbackMutex);
@@ -592,7 +571,6 @@ void CAnlandBackend::deferFrameForIME() {
         }
     });
     
-    // 使用 backend 的 idle 队列延迟执行
     auto backend = m_backend;
     if (backend) {
         backend->addIdleEvent(m_imeDeferCallback);
@@ -605,13 +583,11 @@ void CAnlandBackend::deferFrameForIME() {
 std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
     std::vector<SDRMFormat> formats;
 
-    // 优先 ABGR8888，带 LINEAR 修饰符
     formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
     
-    // 如果消费者实际导入了其他格式，添加它们
     if (m_output && m_output->getBufferCount() > 0) {
         auto buf = m_output->getBuffer(0);
         if (buf && buf->good()) {
@@ -638,7 +614,7 @@ std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
 }
 
 uint32_t CAnlandBackend::getCurrentTimeMs() {
-    return ::getCurrentTimeMs();
+    return getCurrentTimeMsInternal();
 }
 
 void CAnlandBackend::shutdown() {

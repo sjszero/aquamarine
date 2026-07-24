@@ -110,7 +110,6 @@ bool CAnlandOutput::initialize(uint32_t width, uint32_t height, uint32_t refresh
     this->state->setMode(mode);
     this->state->setFormat(m_drmFormat);
 
-    // 默认 Gamma
     std::vector<uint16_t> defaultGamma;
     defaultGamma.resize(256 * 3);
     for (int i = 0; i < 256; i++) {
@@ -159,7 +158,6 @@ bool CAnlandOutput::createRenderFence(int& fenceFd) {
         return false;
     }
     
-    // 获取函数指针
     PFNEGLCREATESYNCKHRPROC eglCreateSyncKHR =
         (PFNEGLCREATESYNCKHRPROC)eglGetProcAddress("eglCreateSyncKHR");
     PFNEGLDUPNATIVEFENCEFDANDROIDPROC eglDupNativeFenceFDANDROID =
@@ -168,12 +166,10 @@ bool CAnlandOutput::createRenderFence(int& fenceFd) {
         (PFNEGLDESTROYSYNCKHRPROC)eglGetProcAddress("eglDestroySyncKHR");
     
     if (!eglCreateSyncKHR || !eglDupNativeFenceFDANDROID || !eglDestroySyncKHR) {
-        // 回退: glFinish
         glFinish();
         return false;
     }
     
-    // Flush 确保渲染命令已提交
     glFlush();
     
     EGLSyncKHR sync = eglCreateSyncKHR(dpy, EGL_SYNC_NATIVE_FENCE_ANDROID, nullptr);
@@ -277,7 +273,6 @@ bool CAnlandOutput::importBuffer(int index) {
 
     uint32_t drmFormat = protocol_format_to_drm(info.format);
     
-    // 尝试使用原始修饰符，如果无效则回退到 LINEAR
     uint64_t modifier = info.modifier;
     if (modifier == DRM_FORMAT_MOD_INVALID || modifier == 0) {
         modifier = DRM_FORMAT_MOD_LINEAR;
@@ -360,20 +355,23 @@ void CAnlandOutput::importBuffers() {
         return;
     }
 
-    std::lock_guard<std::mutex> lock(m_bufferMutex);
+    // 使用作用域锁
+    {
+        std::lock_guard<std::mutex> lock(m_bufferMutex);
 
-    for (int i = 0; i < MAX_BUFS; i++) {
-        destroyBuffer(i);
-    }
-
-    for (int i = 0; i < count; i++) {
-        if (!importBuffer(i)) {
-            ANLAND_ERR("importBuffers: failed to import buffer %d", i);
+        for (int i = 0; i < MAX_BUFS; i++) {
+            destroyBuffer(i);
         }
-    }
 
-    m_bufferCount = count;
-    m_buffersImported = true;
+        for (int i = 0; i < count; i++) {
+            if (!importBuffer(i)) {
+                ANLAND_ERR("importBuffers: failed to import buffer %d", i);
+            }
+        }
+
+        m_bufferCount = count;
+        m_buffersImported = true;
+    }
 
     if (count > 0 && m_slots[0].imported) {
         uint32_t w = m_slots[0].width;
@@ -382,8 +380,6 @@ void CAnlandOutput::importBuffers() {
         if (w > 0 && h > 0) {
             if (w != m_width || h != m_height) {
                 ANLAND_LOG("importBuffers: buffer size changed to %dx%d, updating output", w, h);
-                // 释放锁后更新模式
-                lock.unlock();
                 updateMode(w, h, fmt);
             }
         }
@@ -399,13 +395,11 @@ bool CAnlandOutput::test() {
 std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
     std::vector<SDRMFormat> formats;
 
-    // 优先返回 LINEAR 修饰符
     formats.push_back({.drmFormat = DRM_FORMAT_ABGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XBGR8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_ARGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
     formats.push_back({.drmFormat = DRM_FORMAT_XRGB8888, .modifiers = {DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID}});
 
-    // 添加实际导入的格式
     if (m_buffersImported && m_bufferCount > 0 && m_slots[0].imported) {
         std::lock_guard<std::mutex> slotLock(m_slots[0].mutex);
         uint32_t actualFmt = m_slots[0].format;
@@ -415,19 +409,18 @@ std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
         ANLAND_DEBUG("getRenderFormats: using actual format 0x%x mod 0x%lx", actualFmt, actualMod);
     }
 
-    // 合并后端格式
     if (m_backend) {
         auto backendFormats = m_backend->getRenderFormats();
         for (const auto& fmt : backendFormats) {
             bool exists = false;
-            for (const auto& existing : formats) {
-                if (existing.drmFormat == fmt.drmFormat) {
+            for (const auto& f : formats) {
+                if (f.drmFormat == fmt.drmFormat) {
                     exists = true;
                     break;
                 }
             }
             if (!exists && fmt.drmFormat != DRM_FORMAT_INVALID) {
-                formats.push_back(existing);
+                formats.push_back(fmt);
             }
         }
     }
@@ -439,7 +432,6 @@ bool CAnlandOutput::commit() {
     ANLAND_TRACE("commit START: shouldTriggerRefresh=%d", m_shouldTriggerRefresh);
     if (m_destroying) return true;
 
-    // 确保 EGL 上下文
     ensureEGLContext();
 
     if (m_commitInProgress.exchange(true)) {
@@ -509,20 +501,16 @@ bool CAnlandOutput::commit() {
     std::lock_guard<std::mutex> slotLock(slot.mutex);
 
     if (!slot.imported) {
-        // 释放锁后再导入
         slotLock.~lock_guard();
         if (!importBuffer(m_selectedIndex)) {
             ANLAND_ERR("commit: importBuffer failed for %d", m_selectedIndex);
         }
-        // 重新获取锁
         new (&slotLock) std::lock_guard<std::mutex>(slot.mutex);
     }
 
     if (slot.buffer) {
-        // 直接设置缓冲区
         state->setBuffer(slot.buffer);
 
-        // 使用累积的损伤，而不是 state->damage
         if (slot.hasDamage && !slot.accumDamage.empty()) {
             state->addDamage(slot.accumDamage);
             ANLAND_DEBUG("commit: using buffer %d with accumulated damage", m_selectedIndex);
@@ -530,7 +518,6 @@ bool CAnlandOutput::commit() {
             ANLAND_DEBUG("commit: buffer %d has no new damage", m_selectedIndex);
         }
 
-        // 清空累积损伤，但保留已设置到 state 的损伤
         slot.accumDamage = CRegion();
         slot.hasDamage = false;
     } else {
@@ -538,7 +525,6 @@ bool CAnlandOutput::commit() {
         state->addDamage(CRegion(0, 0, m_width, m_height));
     }
 
-    // 创建渲染 fence
     int fenceFd = -1;
     if (createRenderFence(fenceFd)) {
         set_render_fence(dpy, fenceFd);
@@ -595,7 +581,6 @@ void CAnlandOutput::scheduleFrame(const scheduleFrameReason reason) {
     m_frameScheduled = true;
     this->needsFrame = true;
 
-    // 累积损伤到当前选中的 buffer
     if (m_buffersImported && m_selectedIndex < m_bufferCount) {
         auto& slot = m_slots[m_selectedIndex];
         std::lock_guard<std::mutex> slotLock(slot.mutex);
@@ -656,16 +641,14 @@ void CAnlandOutput::onBufferReady() {
         }
     }
 
-    // 释放当前 buffer
     if (m_selectedIndex >= 0 && m_selectedIndex < m_bufferCount) {
         auto& slot = m_slots[m_selectedIndex];
         std::lock_guard<std::mutex> slotLock(slot.mutex);
         if (slot.buffer) {
             slot.buffer->sendRelease();
             slot.inUse = false;
-            // 清空损伤，因为已经展示
             slot.accumDamage = CRegion();
-            slot.hasDamage = true; // 下次需要全屏重绘
+            slot.hasDamage = true;
             ANLAND_DEBUG("onBufferReady: released buffer %d", m_selectedIndex);
         }
     }
@@ -744,8 +727,7 @@ void CAnlandOutput::exitFallback() {
 
 CSharedPointer<CAnlandDmaBuffer> CAnlandOutput::getBuffer(int index) const {
     if (index < 0 || index >= m_bufferCount) return nullptr;
-    // 注意：m_slots 是 mutable 的，但 const 方法不能调用非 const 的 lock_guard
-    // 这里使用 const_cast 是安全的，因为只是读取
+    // const_cast 是安全的，因为只是读取
     auto& slot = const_cast<BufferSlot&>(m_slots[index]);
     std::lock_guard<std::mutex> slotLock(slot.mutex);
     return slot.buffer;
