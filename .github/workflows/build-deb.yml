@@ -98,8 +98,8 @@ jobs:
           # Graphics
           libpixman-1-dev libcairo2-dev libpango1.0-dev libpangocairo-1.0-0
 
-          # Hypr ecosystem
-          libhyprutils-dev libhyprlang-dev libhyprcursor-dev libhyprgraphics-dev libhyprwire-dev
+          # Hypr ecosystem (libhyprwire-dev installed from sid in backports step)
+          libhyprutils-dev libhyprlang-dev libhyprcursor-dev libhyprgraphics-dev
 
           # Utilities
           libpugixml-dev libtomlplusplus-dev
@@ -151,8 +151,7 @@ jobs:
             liblua5.4-dev \
             hwdata \
             glslang-dev glslang-tools \
-            libssl-dev \
-            libhyprwire-dev
+            libssl-dev
 
       - name: Install backports and sid dependencies
         run: |
@@ -166,9 +165,15 @@ jobs:
             libxkbcommon-dev wayland-protocols \
             libinput-dev \
             libhyprutils-dev libhyprlang-dev \
-            libhyprcursor-dev libhyprgraphics-dev libhyprwire-dev \
+            libhyprcursor-dev libhyprgraphics-dev \
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "⚠️ Some backports packages not available"
+
+          # libhyprwire-dev from sid (needs libstdc++6 >=15, must use -t sid
+          # so APT resolves the full dependency chain from sid)
+          apt-get install -y -t sid --no-install-recommends \
+            libhyprwire-dev \
+            || echo "⚠️ libhyprwire-dev not available from sid"
 
       - name: Verify libdisplay-info
         run: |
@@ -572,12 +577,17 @@ jobs:
             libxkbcommon-dev wayland-protocols \
             libinput-dev \
             libhyprutils-dev libhyprlang-dev \
-            libhyprcursor-dev libhyprgraphics-dev libhyprwire-dev \
+            libhyprcursor-dev libhyprgraphics-dev \
             hyprland-protocols \
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "⚠️ Some packages from backports not available, may need sid"
           
-          # 尝试从 sid 安装不可用的包
+          # libhyprwire-dev from sid (needs libstdc++6 >=15, must use -t sid)
+          apt-get install -y -t sid --no-install-recommends \
+            libhyprwire-dev \
+            || echo "⚠️ libhyprwire-dev not available from sid"
+          
+          # 尝试从 sid 安装其他不可用的包
           apt-get install -y -t sid --no-install-recommends \
             hyprland-protocols \
             || echo "⚠️ hyprland-protocols not in sid either, may use subproject fallback"
