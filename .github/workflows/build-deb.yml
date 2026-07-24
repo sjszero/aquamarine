@@ -111,6 +111,9 @@ jobs:
           # Shader compilation
           glslang-dev glslang-tools
 
+          # OpenSSL (for Hyprland's libcrypto dependency)
+          libssl-dev
+
           # libdisplay-info from sid
           libdisplay-info-dev libdisplay-info3
           EOF
@@ -147,7 +150,8 @@ jobs:
             libre2-dev libmuparser-dev liblcms2-dev \
             liblua5.4-dev \
             hwdata \
-            glslang-dev glslang-tools
+            glslang-dev glslang-tools \
+            libssl-dev
 
       - name: Install backports and sid dependencies
         run: |
