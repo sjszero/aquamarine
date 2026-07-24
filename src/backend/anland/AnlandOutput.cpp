@@ -243,6 +243,182 @@ void CAnlandOutput::updateMode(uint32_t width, uint32_t height, uint32_t format)
     events.state.emit(IOutput::SStateEvent{.size = size});
 }
 
+
+// cacheOrImportBuffer: 尝下DMA-BUF缓存，命中时直接dup fd跳过完整import流程
+bool CAnlandOutput::cacheOrImportBuffer(int index) {
+    ANLAND_TRACE("cacheOrImportBuffer: index=%d", index);
+    if (index < 0 || index >= MAX_BUFS || m_destroying || !m_backend) return false;
+
+    auto* slot = &m_slots[index];
+    if (slot->imported) return true;
+
+    auto* dpy = display();
+    if (!dpy || is_fallback(dpy)) {
+        ANLAND_ERR("cacheOrImportBuffer: display not ready");
+        return false;
+    }
+
+    int fd = get_dmabuf_fd_at(dpy, index);
+    if (fd < 0) {
+        ANLAND_ERR("cacheOrImportBuffer: get_dmabuf_fd_at failed for %d", index);
+        return false;
+    }
+
+    buf_info info;
+    if (get_dmabuf_info_at(dpy, index, &info) < 0) {
+        ANLAND_ERR("cacheOrImportBuffer: get_dmabuf_info_at failed for %d", index);
+        close(fd);
+        return false;
+    }
+
+    uint32_t drmFormat = protocol_format_to_drm(info.format);
+    uint64_t modifier = info.modifier;
+    if (modifier == DRM_FORMAT_MOD_INVALID || modifier == 0)
+        modifier = DRM_FORMAT_MOD_LINEAR;
+
+    ANLAND_DEBUG("cacheOrImportBuffer: fd=%d, size=%dx%d, drm_fmt=0x%x, mod=0x%lx",
+                 fd, info.width, info.height, drmFormat, modifier);
+
+    // 扫描8槽DMA-BUF缓存，按format/modifier/width/height精确匹配
+    int cacheHitIdx = -1;
+    {
+        auto& cache = m_backend->m_dmabufCache;
+        for (int i = 0; i < m_backend->DMABUF_CACHE_SIZE; i++) {
+            if (cache[i].valid &&
+                cache[i].format == drmFormat &&
+                cache[i].modifier == modifier &&
+                cache[i].width == info.width &&
+                cache[i].height == info.height) {
+                cacheHitIdx = i;
+                break;
+            }
+        }
+    }
+
+    if (cacheHitIdx >= 0) {
+        // 缓存命中：dup fd后复用，跳过完整import
+        auto& entry = m_backend->m_dmabufCache[cacheHitIdx];
+        int dupFd = m_backend->createDupFd(entry.fd);
+        if (dupFd < 0) {
+            ANLAND_WARN("cacheOrImportBuffer: cache hit but dup failed, fallback to import");
+            entry.valid = false;
+            if (entry.fd >= 0) { close(entry.fd); entry.fd = -1; }
+        } else {
+            ANLAND_DEBUG("cacheOrImportBuffer: CACHE HIT (slot %d) -> dup fd %d from cache[%d]",
+                         index, dupFd, cacheHitIdx);
+            slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
+                new CAnlandDmaBuffer(dupFd, info, drmFormat, modifier));
+            if (!slot->buffer->good()) {
+                ANLAND_ERR("cacheOrImportBuffer: cache hit but buffer not good");
+                slot->buffer = nullptr;
+                entry.valid = false;
+                if (entry.fd >= 0) { close(entry.fd); entry.fd = -1; }
+                goto do_import;
+            }
+            {
+                auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
+                    ANLAND_TRACE("Buffer %d released (cached)", index);
+                    if (index < m_bufferCount) {
+                        std::lock_guard<std::mutex> lock(m_slots[index].mutex);
+                        m_slots[index].inUse = false;
+                    }
+                });
+                auto destroyListener = slot->buffer->events.destroy.listen([this, index]() {
+                    ANLAND_TRACE("Buffer %d destroyed (cached)", index);
+                    if (index < m_bufferCount) {
+                        std::lock_guard<std::mutex> lock(m_slots[index].mutex);
+                        m_slots[index].inUse = false;
+                        m_slots[index].accumDamage = CRegion();
+                        m_slots[index].imported = false;
+                    }
+                });
+            }
+            slot->width = info.width;
+            slot->height = info.height;
+            slot->format = drmFormat;
+            slot->modifier = modifier;
+            slot->offset = info.offset;
+            slot->stride = info.stride;
+            slot->imported = true;
+            slot->inUse = false;
+            slot->accumDamage = CRegion(0, 0, info.width, info.height);
+            slot->hasDamage = true;
+            ANLAND_LOG("cacheOrImportBuffer: slot %d imported from cache hit", index);
+            close(fd);
+            return true;
+        }
+    }
+
+do_import:
+    ANLAND_DEBUG("cacheOrImportBuffer: CACHE MISS (slot %d), importing normally", index);
+    slot->buffer = CSharedPointer<CAnlandDmaBuffer>(
+        new CAnlandDmaBuffer(fd, info, drmFormat, modifier));
+    if (!slot->buffer->good()) {
+        ANLAND_ERR("cacheOrImportBuffer: buffer not good after import");
+        slot->buffer = nullptr;
+        close(fd);
+        return false;
+    }
+    {
+        auto releaseListener = slot->buffer->events.backendRelease.listen([this, index]() {
+            ANLAND_TRACE("Buffer %d released (imported)", index);
+            if (index < m_bufferCount) {
+                std::lock_guard<std::mutex> lock(m_slots[index].mutex);
+                m_slots[index].inUse = false;
+            }
+        });
+        auto destroyListener = slot->buffer->events.destroy.listen([this, index]() {
+            ANLAND_TRACE("Buffer %d destroyed (imported)", index);
+            if (index < m_bufferCount) {
+                std::lock_guard<std::mutex> lock(m_slots[index].mutex);
+                m_slots[index].inUse = false;
+                m_slots[index].accumDamage = CRegion();
+                m_slots[index].imported = false;
+            }
+        });
+    }
+    slot->width = info.width;
+    slot->height = info.height;
+    slot->format = drmFormat;
+    slot->modifier = modifier;
+    slot->offset = info.offset;
+    slot->stride = info.stride;
+    slot->imported = true;
+    slot->inUse = false;
+    slot->accumDamage = CRegion(0, 0, info.width, info.height);
+    slot->hasDamage = true;
+
+    // 更新缓存：优先用invalid条目，全有效则替换索引0（LRU）
+    {
+        auto& cache = m_backend->m_dmabufCache;
+        int replaceIdx = -1;
+        for (int i = 0; i < m_backend->DMABUF_CACHE_SIZE; i++) {
+            if (!cache[i].valid) { replaceIdx = i; break; }
+        }
+        if (replaceIdx < 0) replaceIdx = 0;
+        if (cache[replaceIdx].valid && cache[replaceIdx].fd >= 0) {
+            close(cache[replaceIdx].fd);
+            cache[replaceIdx].fd = -1;
+        }
+        int cachedFd = m_backend->createDupFd(fd);
+        if (cachedFd >= 0) {
+            cache[replaceIdx] = {
+                .valid = true,
+                .fd = cachedFd,
+                .format = drmFormat,
+                .modifier = modifier,
+                .width = info.width,
+                .height = info.height,
+                .selectedIdx = replaceIdx,
+            };
+        } else {
+            ANLAND_WARN("cacheOrImportBuffer: createDupFd failed for cache update");
+        }
+    }
+    ANLAND_LOG("cacheOrImportBuffer: slot %d imported (cache miss), size %dx%d, fmt 0x%x, mod 0x%lx",
+               index, info.width, info.height, drmFormat, modifier);
+    return true;
+}
 bool CAnlandOutput::importBuffer(int index) {
     ANLAND_TRACE("importBuffer: index=%d", index);
     if (index < 0 || index >= MAX_BUFS || m_destroying) return false;
@@ -502,8 +678,8 @@ bool CAnlandOutput::commit() {
 
     if (!slot.imported) {
         slotLock.~lock_guard();
-        if (!importBuffer(m_selectedIndex)) {
-            ANLAND_ERR("commit: importBuffer failed for %d", m_selectedIndex);
+        if (!cacheOrImportBuffer(m_selectedIndex)) {
+            ANLAND_ERR("commit: cacheOrImportBuffer failed for %d", m_selectedIndex);
         }
         new (&slotLock) std::lock_guard<std::mutex>(slot.mutex);
     }
@@ -729,6 +905,14 @@ CSharedPointer<CAnlandDmaBuffer> CAnlandOutput::getBuffer(int index) const {
     if (index < 0 || index >= m_bufferCount) return nullptr;
     // const_cast 是安全的，因为只是读取
     auto& slot = const_cast<BufferSlot&>(m_slots[index]);
+    std::lock_guard<std::mutex> slotLock(slot.mutex);
+    return slot.buffer;
+}
+
+CSharedPointer<CAnlandDmaBuffer> CAnlandOutput::getCurrentBuffer() const {
+    int idx = m_selectedIndex;
+    if (idx < 0 || idx >= m_bufferCount) return nullptr;
+    auto& slot = const_cast<BufferSlot&>(m_slots[idx]);
     std::lock_guard<std::mutex> slotLock(slot.mutex);
     return slot.buffer;
 }

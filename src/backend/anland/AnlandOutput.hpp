@@ -67,6 +67,7 @@ public:
     // 直接缓冲区访问（绕过 swapchain）
     int getBufferCount() const { return m_bufferCount; }
     CSharedPointer<CAnlandDmaBuffer> getBuffer(int index) const;
+    CSharedPointer<CAnlandDmaBuffer> getCurrentBuffer() const;
     CSharedPointer<CBackend> getCBackend() const;
 
     // EGL 上下文管理
@@ -94,6 +95,7 @@ public:
 
 private:
     bool importBuffer(int index);
+    bool cacheOrImportBuffer(int index);
     void destroyBuffer(int index);
     void importBuffers();
     void updateMode(uint32_t width, uint32_t height, uint32_t format);

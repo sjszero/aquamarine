@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <cstdio>
+#include <cstring>
 #include <chrono>
 #include <cmath>
 #include <xf86drm.h>
@@ -73,6 +74,7 @@ CAnlandBackend::CAnlandBackend(CSharedPointer<CBackend> backend, const std::stri
 CAnlandBackend::~CAnlandBackend() {
     if (m_shutdownDone.exchange(true)) return;
     m_destroying = true;
+    evictDmabufCache();
     teardownReconnectTimer();
     anland_audio_stop();
     anland_camera_stop();
@@ -179,6 +181,7 @@ void CAnlandBackend::enterFallback() {
     if (m_inFallback || m_destroying) return;
     ANLAND_LOG("enterFallback: manually entering fallback");
 
+    evictDmabufCache();
     m_inFallback = true;
     m_outputEmitted = false;
 
@@ -617,9 +620,30 @@ uint32_t CAnlandBackend::getCurrentTimeMs() {
     return getCurrentTimeMsInternal();
 }
 
+int CAnlandBackend::createDupFd(int fd) {
+    if (fd < 0) return -1;
+    int dupFd = fcntl(fd, F_DUPFD_CLOEXEC, 3);
+    if (dupFd < 0) {
+        ANLAND_ERR("createDupFd: fcntl F_DUPFD_CLOEXEC failed: %s", strerror(errno));
+        return -1;
+    }
+    return dupFd;
+}
+
+void CAnlandBackend::evictDmabufCache() {
+    for (auto& entry : m_dmabufCache) {
+        if (entry.valid && entry.fd >= 0) {
+            close(entry.fd);
+            entry.fd = -1;
+        }
+        entry.valid = false;
+    }
+}
+
 void CAnlandBackend::shutdown() {
     if (m_shutdownDone.exchange(true)) return;
     m_destroying = true;
+    evictDmabufCache();
     teardownReconnectTimer();
     if (m_output) {
         m_output->releaseBuffers();

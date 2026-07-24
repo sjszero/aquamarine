@@ -107,6 +107,23 @@ public:
     // 获取当前时间 (ms)
     static uint32_t getCurrentTimeMs();
 
+    // DMA-BUF 缓存管理
+    int createDupFd(int fd);
+    void evictDmabufCache();
+
+    // DMA-BUF 缓存（8-slot LRU-like 缓存）- 供 CAnlandOutput 访问
+    static constexpr int DMABUF_CACHE_SIZE = 8;
+    struct DmabufCacheEntry {
+        bool valid = false;
+        int fd = -1;
+        uint32_t format = 0;
+        uint64_t modifier = 0;
+        uint32_t width = 0;
+        uint32_t height = 0;
+        int selectedIdx = -1;
+    };
+    std::array<DmabufCacheEntry, DMABUF_CACHE_SIZE> m_dmabufCache;
+
     CWeakPointer<CAnlandBackend> self;
 
 private:
@@ -191,6 +208,7 @@ private:
         Vector2D accumDelta;
         bool swipeMode = false;
     } m_gesture;
+
 };
 
 } // namespace Aquamarine

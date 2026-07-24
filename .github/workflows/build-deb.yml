@@ -597,6 +597,12 @@ jobs:
         run: |
           cd "${{ env.HYPR_SOURCE_DIR }}"
           
+          echo "📦 Ensure our build Aquamarine is not overwritten..."
+          # 卸载系统源自带的旧版 libaquamarine-dev（如有），防止 build-dep 拉回旧包覆盖我们编译的新版
+          dpkg -r libaquamarine-dev 2>/dev/null || true
+          dpkg -r libaquamarine11 2>/dev/null || true
+          apt-mark hold libaquamarine-dev 2>/dev/null || true
+          
           echo "📦 Installing build dependencies..."
           apt-get build-dep -y ./ || {
             echo "⚠️ build-dep failed, installing manually..."
@@ -611,6 +617,24 @@ jobs:
           
           # 恢复 debian/control（build-dep 已使用修改后的版本）
           mv debian/control.bak debian/control 2>/dev/null || true
+          
+          # 验证我们编译的 Anland 头文件未被覆盖
+          echo "=== Verifying Anland headers after build-dep ==="
+          if [ -d /usr/include/aquamarine/backend/anland ]; then
+            echo "✅ Anland headers still present"
+            ls -la /usr/include/aquamarine/backend/anland/
+          else
+            echo "❌ Anland headers missing! Our built version was overwritten."
+            echo "   Attempting to reinstall from compiled source..."
+            cd /__w/aquamarine/aquamarine/aquamarine
+            make install
+            if [ -d /usr/include/aquamarine/backend/anland ]; then
+              echo "✅ Restored our Anland headers"
+            else
+              echo "❌ Still missing, will fall back to env var approach"
+              echo "HAS_ANLAND_HEADERS=false" >> $GITHUB_ENV
+            fi
+          fi
 
       - name: Build Hyprland .deb
         if: inputs.skip_hyprland != true
