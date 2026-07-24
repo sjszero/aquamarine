@@ -99,7 +99,7 @@ jobs:
           libpixman-1-dev libcairo2-dev libpango1.0-dev libpangocairo-1.0-0
 
           # Hypr ecosystem
-          libhyprutils-dev libhyprlang-dev libhyprcursor-dev libhyprgraphics-dev
+          libhyprutils-dev libhyprlang-dev libhyprcursor-dev libhyprgraphics-dev libhyprwire-dev
 
           # Utilities
           libpugixml-dev libtomlplusplus-dev
@@ -151,7 +151,8 @@ jobs:
             liblua5.4-dev \
             hwdata \
             glslang-dev glslang-tools \
-            libssl-dev
+            libssl-dev \
+            libhyprwire-dev
 
       - name: Install backports and sid dependencies
         run: |
@@ -165,7 +166,7 @@ jobs:
             libxkbcommon-dev wayland-protocols \
             libinput-dev \
             libhyprutils-dev libhyprlang-dev \
-            libhyprcursor-dev libhyprgraphics-dev \
+            libhyprcursor-dev libhyprgraphics-dev libhyprwire-dev \
             libpipewire-0.3-dev libspa-0.2-dev \
             || echo "⚠️ Some backports packages not available"
 
@@ -553,77 +554,36 @@ jobs:
           EOF
 
       # ==========================================================
-      # 【关键修复】正确修改 debian/control，避免重复字段
+      # 【简化】直接手动安装 Hyprland 构建依赖（跳过 build-dep，
+      #  因为 libaquamarine-dev 被 hold 后 build-dep 总会失败）
       # ==========================================================
-      - name: Fix debian/control - remove Aquamarine build dependency
-        if: inputs.skip_hyprland != true
-        run: |
-          cd "${{ env.HYPR_SOURCE_DIR }}"
-          
-          echo "📝 Original debian/control:"
-          head -30 debian/control
-          
-          # 备份原始文件
-          cp debian/control debian/control.bak
-          
-          # 使用 sed 删除 libaquamarine-dev 依赖（更精确）
-          # 处理各种格式: ", libaquamarine-dev", "libaquamarine-dev," 等
-          sed -i '/^Build-Depends:/ s/, libaquamarine-dev[^,]*//g' debian/control
-          sed -i '/^Build-Depends:/ s/libaquamarine-dev[^,]*,\?//g' debian/control
-          sed -i '/^Build-Depends:/ s/,,/,/g' debian/control
-          sed -i '/^Build-Depends:/ s/,$//g' debian/control
-          
-          echo ""
-          echo "📝 Modified debian/control:"
-          grep "^Build-Depends:" debian/control || echo "   Build-Depends not found"
-          
-          # 检查是否有重复字段
-          echo ""
-          echo "🔍 Checking for duplicate fields..."
-          if grep -E "^(Provides|Conflicts|Replaces):" debian/control | sort | uniq -d; then
-            echo "⚠️ Duplicate fields found! Fixing..."
-            # 移除重复的 Provides/Conflicts/Replaces
-            for field in Provides Conflicts Replaces; do
-              # 只保留第一个出现
-              first_line=$(grep -n "^$field:" debian/control | head -1 | cut -d: -f1)
-              if [ -n "$first_line" ]; then
-                # 删除所有其他行
-                sed -i "/^$field:/d" debian/control
-                # 在第一个位置重新插入
-                sed -i "${first_line}i$field: " debian/control
-              fi
-            done
-            echo "✅ Duplicate fields removed"
-          fi
-
-      - name: Install Hyprland build dependencies (without Aquamarine)
+      - name: Install Hyprland build dependencies (manual)
         if: inputs.skip_hyprland != true
         run: |
           cd "${{ env.HYPR_SOURCE_DIR }}"
           
           echo "📦 Ensure our build Aquamarine is not overwritten..."
-          # 卸载系统源自带的旧版 libaquamarine-dev（如有），防止 build-dep 拉回旧包覆盖我们编译的新版
           dpkg -r libaquamarine-dev 2>/dev/null || true
           dpkg -r libaquamarine11 2>/dev/null || true
           apt-mark hold libaquamarine-dev 2>/dev/null || true
           
-          echo "📦 Installing build dependencies..."
-          apt-get build-dep -y ./ || {
-            echo "⚠️ build-dep failed, installing manually..."
-            apt-get install -y -t trixie-backports --no-install-recommends \
-              libxkbcommon-dev wayland-protocols \
-              libinput-dev \
-              libhyprutils-dev libhyprlang-dev \
-              libhyprcursor-dev libhyprgraphics-dev \
-              libpipewire-0.3-dev libspa-0.2-dev \
-              || true
-          }
+          echo "📦 Installing Hyprland build dependencies manually..."
+          apt-get install -y -t trixie-backports --no-install-recommends \
+            libxkbcommon-dev wayland-protocols \
+            libinput-dev \
+            libhyprutils-dev libhyprlang-dev \
+            libhyprcursor-dev libhyprgraphics-dev libhyprwire-dev \
+            hyprland-protocols \
+            libpipewire-0.3-dev libspa-0.2-dev \
+            || echo "⚠️ Some packages from backports not available, may need sid"
           
-          # 恢复 debian/control（build-dep 已使用修改后的版本）
-          mv debian/control.bak debian/control 2>/dev/null || true
+          # 尝试从 sid 安装不可用的包
+          apt-get install -y -t sid --no-install-recommends \
+            hyprland-protocols \
+            || echo "⚠️ hyprland-protocols not in sid either, may use subproject fallback"
           
           # 验证我们编译的 Anland 头文件未被覆盖
-          echo "=== Verifying Anland headers after build-dep ==="
+          echo "=== Verifying Anland headers after install ==="
           if [ -d /usr/include/aquamarine/backend/anland ]; then
             echo "✅ Anland headers still present"
             ls -la /usr/include/aquamarine/backend/anland/
@@ -635,7 +595,7 @@ jobs:
             if [ -d /usr/include/aquamarine/backend/anland ]; then
               echo "✅ Restored our Anland headers"
             else
-              echo "❌ Still missing, will fall back to env var approach"
+              echo "❌ Still missing"
               echo "HAS_ANLAND_HEADERS=false" >> $GITHUB_ENV
             fi
           fi
