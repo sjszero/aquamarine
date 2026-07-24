@@ -4,6 +4,7 @@
 #include "AnlandPointer.hpp"
 #include "AnlandKeyboard.hpp"
 #include "AnlandTouch.hpp"
+#include "AnlandBuffer.hpp"
 #include <sys/timerfd.h>
 #include <unistd.h>
 #include <fcntl.h>
@@ -592,7 +593,7 @@ void CAnlandBackend::deferFrameForIME() {
     });
     
     // 使用 backend 的 idle 队列延迟执行
-    auto backend = m_backend.lock();
+    auto backend = m_backend;
     if (backend) {
         backend->addIdleEvent(m_imeDeferCallback);
     } else {
@@ -624,7 +625,10 @@ std::vector<SDRMFormat> CAnlandBackend::getRenderFormats() {
                     }
                 }
                 if (!exists) {
-                    formats.push_back({.drmFormat = attrs.format, .modifiers = {attrs.modifier, DRM_FORMAT_MOD_INVALID}});
+                    SDRMFormat fmt;
+                    fmt.drmFormat = attrs.format;
+                    fmt.modifiers = {attrs.modifier, DRM_FORMAT_MOD_INVALID};
+                    formats.push_back(fmt);
                 }
             }
         }

@@ -376,15 +376,14 @@ void CAnlandOutput::importBuffers() {
     m_buffersImported = true;
 
     if (count > 0 && m_slots[0].imported) {
-        std::lock_guard<std::mutex> slotLock(m_slots[0].mutex);
         uint32_t w = m_slots[0].width;
         uint32_t h = m_slots[0].height;
         uint32_t fmt = m_slots[0].format;
         if (w > 0 && h > 0) {
             if (w != m_width || h != m_height) {
                 ANLAND_LOG("importBuffers: buffer size changed to %dx%d, updating output", w, h);
-                // 先释放锁再调用 updateMode
-                slotLock.unlock();
+                // 释放锁后更新模式
+                lock.unlock();
                 updateMode(w, h, fmt);
             }
         }
@@ -428,7 +427,7 @@ std::vector<SDRMFormat> CAnlandOutput::getRenderFormats() {
                 }
             }
             if (!exists && fmt.drmFormat != DRM_FORMAT_INVALID) {
-                formats.push_back(fmt);
+                formats.push_back(existing);
             }
         }
     }
@@ -510,11 +509,13 @@ bool CAnlandOutput::commit() {
     std::lock_guard<std::mutex> slotLock(slot.mutex);
 
     if (!slot.imported) {
-        slotLock.unlock();
+        // 释放锁后再导入
+        slotLock.~lock_guard();
         if (!importBuffer(m_selectedIndex)) {
             ANLAND_ERR("commit: importBuffer failed for %d", m_selectedIndex);
         }
-        slotLock.lock();
+        // 重新获取锁
+        new (&slotLock) std::lock_guard<std::mutex>(slot.mutex);
     }
 
     if (slot.buffer) {
@@ -743,8 +744,11 @@ void CAnlandOutput::exitFallback() {
 
 CSharedPointer<CAnlandDmaBuffer> CAnlandOutput::getBuffer(int index) const {
     if (index < 0 || index >= m_bufferCount) return nullptr;
-    std::lock_guard<std::mutex> slotLock(m_slots[index].mutex);
-    return m_slots[index].buffer;
+    // 注意：m_slots 是 mutable 的，但 const 方法不能调用非 const 的 lock_guard
+    // 这里使用 const_cast 是安全的，因为只是读取
+    auto& slot = const_cast<BufferSlot&>(m_slots[index]);
+    std::lock_guard<std::mutex> slotLock(slot.mutex);
+    return slot.buffer;
 }
 
 CSharedPointer<CBackend> CAnlandOutput::getCBackend() const {
